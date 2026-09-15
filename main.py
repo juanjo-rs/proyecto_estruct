@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 from src.catalogo import CatalogoSismico
 from src.dominio import Evento, Zona
-
+from decimal import Decimal
 
 def main() -> None:
     zonas = [Zona("Ciudad Central", 0, 500, 0, 500, True)]
@@ -19,10 +19,51 @@ def main() -> None:
         revision=1,
         estaciones={"EST-01"},
     )
+    evento2 = Evento(
+        identificador=20,
+        magnitud=5.0,
+        profundidad_hipocentro=50.0,
+        x=200.0,
+        y=200.0,
+        ocurrencia="2026-09-07T11:00:00Z",
+        revision=1,
+        estaciones={"EST-02"},
+    )
+    evento3 = Evento(
+        identificador=30,
+        magnitud=4.0,
+        profundidad_hipocentro=50.0,
+        x=300.0,
+        y=300.0,
+        ocurrencia="2026-09-07T11:30:00Z",
+        revision=1,
+        estaciones={"EST-03"},
+    )
     catalogo.crear_evento(evento)
+    catalogo.crear_evento(evento2)
+    catalogo.crear_evento(evento3)
     print(f"{evento.clave()} -> prioridad {evento.prioridad}")
-    print("Auditoria:", catalogo.avl.auditar())
+    print(f"{evento2.clave()} -> prioridad {evento2.prioridad}")
+    print(f"{evento3.clave()} -> prioridad {evento3.prioridad}")
 
+    print("Auditoria:", catalogo.avl.auditar())
+    print("AVL:")
+    for evento in catalogo.avl.inorden():
+        print(evento.identificador)
+    print("BST:")
+    for evento in catalogo.bst.inorden():
+        print(evento.identificador)
+
+    print("Altura AVL:", catalogo.avl.altura())
+    print("Altura BST:", catalogo.bst.altura())
+    evento_buscado, examinados_avl = catalogo.avl.buscar_clave(evento.clave())
+    print("Nodos examinados AVL:", examinados_avl)
+    evento_buscado, examinados_bst = catalogo.bst.buscar_clave(evento.clave())
+    print("Nodos examinados BST:", examinados_bst)
+    evento_buscado, examinados_bst = catalogo.bst.buscar_clave(evento3.clave())
+    print("Nodos examinados BST buscando evento3:", examinados_bst)
+    evento_buscado, examinados_avl = catalogo.avl.buscar_clave(evento3.clave())
+    print("Nodos examinados AVL buscando evento3:", examinados_avl)
 
 if __name__ == "__main__":
     main()

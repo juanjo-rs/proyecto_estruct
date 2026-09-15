@@ -35,6 +35,9 @@ class ArbolAVL:
     def _altura(nodo: Optional[NodoArbol]) -> int:
         return -1 if nodo is None else nodo.altura
 
+    def altura(self):
+        return self._altura(self.raiz)
+
     @classmethod
     def _actualizar_altura(cls, nodo: NodoArbol) -> None:
         nodo.altura = 1 + max(cls._altura(nodo.izquierda), cls._altura(nodo.derecha))

@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Iterable, Optional
 
 from .arbol_avl import ArbolAVL
+from .arbol_bst import ArbolBST
 from .cola import Cola
 from .dominio import (
     EstadoAtencion,
@@ -35,6 +36,7 @@ class CatalogoSismico:
         self.zonas = list(zonas)
         self.reloj = fecha_utc(reloj)
         self.avl = ArbolAVL()
+        self.bst = ArbolBST()
         self.indice_activos: dict[int, Evento] = {}
         self.archivados: dict[int, Evento] = {}
         self.eliminados: set[int] = set()
@@ -64,6 +66,7 @@ class CatalogoSismico:
             raise ValueError("El identificador fue eliminado y no puede reutilizarse.")
         self._normalizar_y_clasificar(evento)
         self.avl.insertar(evento, balancear=not self.modo_estres)
+        self.bst.insertar(evento)
         self.indice_activos[evento.identificador] = evento
         if registrar_accion:
             self._registrar_accion(f"Crear SIS-{evento.identificador:06d}")
