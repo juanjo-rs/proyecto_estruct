@@ -1,0 +1,12 @@
+---
+description: Tutoría SismoLab AVL — roles, plan y explicación bajo demanda
+alwaysApply: true
+---
+
+# SismoLab — contexto de tutoría
+
+- Plan: `docs/WORKPLAN.md`. Guía: `docs/GUIA_IMPLEMENTACION.md`. Enunciado: PDF en `docs/`.
+- Juan Jose: estructuras (AVL/BST, estrés, archivo, rotaciones, tests). Tutor: validar decisiones vs PDF antes de codear.
+- Flujo: decisión 5–10 líneas → validación → implementar con prueba.
+- Si Juan Jose no entiende algo (concepto, término, decisión, código, error): **explicarlo** de forma clara (idea simple → por qué importa en el enunciado → ejemplo corto). No asumir que ya lo sabe; puede pedirlo en cualquier momento.
+- No negociable: clave `(P,M,I)`, pila/cola propias, AVL central, JSON sin ruta fija, GUI separada, sin libs de árboles/pilas/colas/colecciones ordenadas.

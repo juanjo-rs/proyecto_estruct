@@ -26,6 +26,7 @@ Criterio: Juan Jose tiene **más tiempo y ganas de aprender estructuras**; Samue
 2. Tutor valida contra PDF/guía (aceptar / ajustar / rechazar con motivo).
 3. Luego se implementa; cada PR/cambio trae prueba + comentario en inglés si la regla no es obvia.
 4. Samuel/Jefferson revisan integración (catálogo/GUI) cuando toque su frontera.
+5. **Explicar sin asumir:** si Juan Jose no entiende un concepto, término, decisión o fragmento de código, el tutor lo explica con claridad (idea simple → por qué importa en el PDF → ejemplo corto). Puede pedir la explicación en cualquier momento; no bloquea el avance.
 
 **No negociable (ya cerrado por el PDF):** clave `(P,M,I)`, prioridad, pila/cola propias, AVL central (no lista ordenada), JSON sin ruta fija, GUI separada de negocio, sin libs de árboles/pilas/colas/colecciones ordenadas.
 
@@ -145,5 +146,6 @@ Regla de la guía: **no avanzar de fase sin pruebas de la anterior**.
 
 - Juan Jose toma B* y partes de A/E/F; propone decisiones antes de codear.
 - El tutor evalúa cada decisión: alineación PDF, costo, riesgo de inconsistencia, si rompe invariantes.
+- Si algo no queda claro (teoría, código, error, decisión), el tutor lo explica a pedido o cuando detecte duda; la explicación no reemplaza la validación contra el PDF.
 - Samuel/Jefferson no son “bloqueadores”: si no responden, Juan Jose avanza con decisión documentada y se revalida juntos.
 - Este plan es el tablero; al ejecutar, se puede bajar a issues/checklist en el repo.
