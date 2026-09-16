@@ -38,3 +38,7 @@ La guia en `docs/GUIA_IMPLEMENTACION.md` define las fases restantes, los
 invariantes y los casos de prueba obligatorios. No se debe considerar esta base
 como una entrega terminada: faltan, entre otros, asociaciones, archivo de ramas,
 persistencia completa, deshacer por instantaneas y las vistas graficas finales.
+
+## Plan de trabajo
+
+Roles, tareas (A–F) y cronograma hasta la entrega: [`docs/WORKPLAN.md`](docs/WORKPLAN.md).
