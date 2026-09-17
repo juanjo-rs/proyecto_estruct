@@ -28,6 +28,9 @@ class VentanaSismoLab(tk.Tk):
         self.estado = ttk.Label(self, text="Eventos activos: 0 | Cola: 0 | Modo normal")
         self.estado.pack(pady=20)
         ttk.Button(self, text="Actualizar indicadores", command=self.actualizar_indicadores).pack()
+        ttk.Button(self, text="Activar modo estres", command=self.activar_estres).pack(pady=4)
+        ttk.Button(self, text="Desactivar (recuperar)", command=self.desactivar_estres).pack(pady=4)
+
 
     def actualizar_indicadores(self) -> None:
         modo = "estres" if self.catalogo.modo_estres else "normal"
@@ -36,6 +39,13 @@ class VentanaSismoLab(tk.Tk):
             f"Cola: {len(self.catalogo.reportes_pendientes)} | Modo {modo}"
         )
 
+    def activar_estres(self) -> None:
+        self.catalogo.activar_modo_estres()
+        self.actualizar_indicadores()
+
+    def desactivar_estres(self) -> None:
+        self.catalogo.desactivar_modo_estres()
+        self.actualizar_indicadores()
 
 if __name__ == "__main__":
     VentanaSismoLab().mainloop()

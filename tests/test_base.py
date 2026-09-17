@@ -71,3 +71,14 @@ class PruebasBase(TestCase):
         self.assertEqual(corregido.estado, EstadoAtencion.PENDIENTE)
         encontrado, _ = self.catalogo.avl.buscar_clave(corregido.clave())
         self.assertIs(encontrado, corregido)
+
+    def test_activar_estres_y_desactivar_recuperar(self) -> None:
+        self.assertTrue(self.catalogo.activar_modo_estres())
+        for i in range(1,8):
+            self.catalogo.crear_evento(evento(i))
+        self.assertTrue(self.catalogo.modo_estres)
+        self.assertFalse(self.catalogo.avl.auditar().balanceado)
+        giros = self.catalogo.desactivar_modo_estres()
+        self.assertGreaterEqual(giros,1)
+        self.assertFalse(self.catalogo.modo_estres)
+        self.assertTrue(self.catalogo.avl.auditar().balanceado)
