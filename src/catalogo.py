@@ -43,12 +43,34 @@ class CatalogoSismico:
         self.reportes_pendientes: Cola[Reporte] = Cola()
         self.historial: Pila[AccionPendienteDeInstantanea] = Pila()
         self.modo_estres = False
+        self.cola_pausada = False
         self.metricas = {
             "correcciones_aceptadas": 0,
             "reportes_descartados": 0,
             "conflictos": 0,
             "eliminaciones": 0,
         }
+    
+    def activar_modo_estres(self) -> bool:
+        if self.modo_estres:
+            return False
+        self.modo_estres = True
+        self._registrar_accion("Activar modo estres")
+        return True
+    
+    def desactivar_modo_estres(self) -> int:
+        return self.recuperar_desde_estres()
+    
+    def recuperar_desde_estres(self) -> int:
+        self.cola_pausada = True
+        try:
+            giros = self.avl.recuperar_balance()
+        finally:
+            self.cola_pausada = False
+        self.modo_estres = False
+        self._registrar_accion("Recuperar AVL y desactivar modo estres")
+        return giros
+
 
     def _normalizar_y_clasificar(self, evento: Evento) -> None:
         evento.validar(self.reloj)

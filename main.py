@@ -65,5 +65,60 @@ def main() -> None:
     evento_buscado, examinados_avl = catalogo.avl.buscar_clave(evento3.clave())
     print("Nodos examinados AVL buscando evento3:", examinados_avl)
 
+
+    def menu():
+        siguiente_id=1
+        while True:
+                
+            print("Welcome")
+            print("==================")
+            print("1. Activar modo estres")
+            print("2. Desactivar modo estres")
+            print("3. crear evento ")
+            print("4. Crear rafaga")
+            print("0. Exit")
+
+            option = int(input("Ingresar opcion: "))
+
+            if option ==1:
+                catalogo.activar_modo_estres()
+                print("Modo estres: ", catalogo.modo_estres)
+
+            if option == 2:
+                catalogo.desactivar_modo_estres()
+                giros = catalogo.desactivar_modo_estres()
+                print("Giros: ",giros,", Modo estres: ",catalogo.modo_estres)
+
+            if option == 3:
+                catalogo.crear_evento(Evento(
+                    identificador=siguiente_id,
+                    magnitud=4.0,
+                    profundidad_hipocentro=50.0,
+                    x=300.0,
+                    y=300.0,
+                    ocurrencia="2026-09-07T11:30:00Z",
+                    revision=1,
+                    estaciones={"EST-03"},))
+                siguiente_id +=1    
+            
+            if option ==4:
+                numero=int(input("Numero de la rafaga entre 1-7"))
+                for i in range(numero):
+                    catalogo.crear_evento(Evento(
+                        identificador=siguiente_id,
+                        magnitud=4.0,
+                        profundidad_hipocentro=50.0,
+                        x=300.0,
+                        y=300.0,
+                        ocurrencia="2026-09-07T11:30:00Z",
+                        revision=1,
+                        estaciones={"EST-03"},))
+                    siguiente_id +=1
+                print(catalogo.avl.auditar().balanceado)        
+            
+            if option == 0:
+                break
+    menu()
+
 if __name__ == "__main__":
     main()
