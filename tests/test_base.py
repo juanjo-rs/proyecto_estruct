@@ -71,15 +71,70 @@ class PruebasBase(TestCase):
         self.assertEqual(corregido.estado, EstadoAtencion.PENDIENTE)
         encontrado, _ = self.catalogo.avl.buscar_clave(corregido.clave())
         self.assertIs(encontrado, corregido)
-    
+
+    def test_deshacer_correccion_restaura_datos_y_estaciones(self) -> None:
+        self.catalogo.crear_evento(evento(10, magnitud=4.8))
+        self.catalogo.marcar_revisado(10)
+        self.catalogo.corregir_evento(10, {"magnitud": 6.2, "profundidad_hipocentro": 15.0})
+        self.catalogo.indice_activos[10].estaciones.add("EST-02")
+
+        self.assertEqual(self.catalogo.deshacer(), "Deshecho: Corregir SIS-000010")
+        restaurado = self.catalogo.indice_activos[10]
+        self.assertEqual(str(restaurado.magnitud), "4.8")
+        self.assertEqual(restaurado.revision, 1)
+        self.assertEqual(restaurado.estaciones, {"EST-01"})
+        self.assertEqual(restaurado.estado, EstadoAtencion.REVISADO)
+
+    def test_deshacer_eliminacion_restaura_evento_y_arbol(self) -> None:
+        self.catalogo.crear_evento(evento(10))
+        self.catalogo.eliminar_evento(10)
+
+        self.catalogo.deshacer()
+        estado, restaurado = self.catalogo.consultar(10)
+        self.assertEqual(estado, "activo")
+        self.assertIsNotNone(restaurado)
+        self.assertEqual(self.catalogo.eliminados, set())
+        encontrado, _ = self.catalogo.avl.buscar_clave(restaurado.clave())
+        self.assertIs(encontrado, restaurado)
+
+    def test_deshacer_reporte_descartado_devuelve_reporte_al_frente(self) -> None:
+        self.catalogo.crear_evento(evento(10, revision=2))
+        reporte = Reporte(evento(10, revision=1), "EST-02")
+        self.catalogo.encolar_reporte(reporte)
+        self.assertEqual(self.catalogo.procesar_siguiente_reporte(), "descartado: reporte antiguo")
+        self.assertEqual(len(self.catalogo.reportes_pendientes), 0)
+        self.assertEqual(self.catalogo.metricas["reportes_descartados"], 1)
+
+        self.catalogo.deshacer()
+        self.assertEqual(len(self.catalogo.reportes_pendientes), 1)
+        restaurado = self.catalogo.reportes_pendientes.frente()
+        self.assertIsNot(restaurado, reporte)
+        self.assertEqual(restaurado.estacion, "EST-02")
+        self.assertEqual(restaurado.evento.revision, 1)
+        self.assertEqual(str(restaurado.evento.magnitud), "4.5")
+        self.assertEqual(self.catalogo.metricas["reportes_descartados"], 0)
+
+    def test_deshacer_sin_historial_informa_error(self) -> None:
+        with self.assertRaisesRegex(IndexError, "No hay acciones para deshacer"):
+            self.catalogo.deshacer()
+
+    def test_correccion_invalida_no_crea_instantanea(self) -> None:
+        self.catalogo.crear_evento(evento(10))
+        cantidad_antes = len(self.catalogo.historial)
+
+        with self.assertRaises(ValueError):
+            self.catalogo.corregir_evento(10, {"magnitud": 20.0})
+
+        self.assertEqual(len(self.catalogo.historial), cantidad_antes)
+        self.assertEqual(str(self.catalogo.indice_activos[10].magnitud), "4.5")
+
     def test_activar_estres_y_desactivar_recuperar(self) -> None:
         self.assertTrue(self.catalogo.activar_modo_estres())
-        for i in range(1,8):
+        for i in range(1, 8):
             self.catalogo.crear_evento(evento(i))
         self.assertTrue(self.catalogo.modo_estres)
         self.assertFalse(self.catalogo.avl.auditar().balanceado)
         giros = self.catalogo.desactivar_modo_estres()
-        self.assertGreaterEqual(giros,1)
+        self.assertGreaterEqual(giros, 1)
         self.assertFalse(self.catalogo.modo_estres)
         self.assertTrue(self.catalogo.avl.auditar().balanceado)
-

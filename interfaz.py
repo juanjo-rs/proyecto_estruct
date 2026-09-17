@@ -37,6 +37,7 @@ class VentanaSismoLab(tk.Tk):
             text=f"Eventos activos: {len(self.catalogo.indice_activos)} | "
             f"Cola: {len(self.catalogo.reportes_pendientes)} | Modo {modo}"
         )
+
     def activar_estres(self) -> None:
         self.catalogo.activar_modo_estres()
         self.actualizar_indicadores()
