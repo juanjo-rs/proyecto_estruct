@@ -1,0 +1,4 @@
+﻿.cursor/
+__pycache__/
+*.py[cod]
+tests/__pycache__/
