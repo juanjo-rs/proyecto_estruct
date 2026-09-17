@@ -138,3 +138,15 @@ class PruebasBase(TestCase):
         self.assertGreaterEqual(giros, 1)
         self.assertFalse(self.catalogo.modo_estres)
         self.assertTrue(self.catalogo.avl.auditar().balanceado)
+
+    def  test_sincronizacion_arboles_avl_y_bst(self) -> None:
+        for identificador in (10,20,30):
+            self.catalogo.crear_evento(evento(identificador))
+        self.assertEqual([x.identificador for x in self.catalogo.avl.inorden()],
+                        [y.identificador for y in self.catalogo.bst.inorden()])
+        self.catalogo.corregir_evento(10, {"magnitud": 6.2, "profundidad_hipocentro": 15.0})
+        self.assertEqual([x.identificador for x in self.catalogo.avl.inorden()],
+                        [y.identificador for y in self.catalogo.bst.inorden()])
+        self.catalogo.eliminar_evento(20)
+        self.assertEqual([x.identificador for x in self.catalogo.avl.inorden()],
+                        [y.identificador for y in self.catalogo.bst.inorden()])     

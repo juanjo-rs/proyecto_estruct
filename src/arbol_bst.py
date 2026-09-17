@@ -7,6 +7,8 @@ from typing import Optional,Generator
 from .dominio import Evento
 from .nodo import NodoArbol
 
+Clave = tuple[int, object, int]
+
 
 class ArbolBST:
     """Reference tree used only to compare against the AVL."""
@@ -52,7 +54,7 @@ class ArbolBST:
 
         return calcular(self.raiz)
 
-    def buscar_clave(self, clave: tuple[int, object, int]) -> tuple[Optional[Evento], int]:
+    def buscar_clave(self, clave: Clave) -> tuple[Optional[Evento], int]:
         actual = self.raiz
         examinados = 0
         while actual is not None:
@@ -61,3 +63,50 @@ class ArbolBST:
                 return actual.evento, examinados
             actual = actual.izquierda if clave < actual.evento.clave() else actual.derecha
         return None, examinados
+
+    def eliminar(self, clave: Clave) -> Evento:
+        """Remove exactly the node whose key is supplied."""
+        eliminado: list[Evento] = []
+        self.raiz = self._eliminar(self.raiz, clave, eliminado)
+        if not eliminado:
+            raise KeyError(f"No existe la clave {clave}.")
+        return eliminado[0]
+
+    def _eliminar(
+        self, nodo: Optional[NodoArbol], clave: Clave,eliminado: list[Evento]
+    ) -> Optional[NodoArbol]:
+        if nodo is None:
+            return None
+        if clave < nodo.evento.clave():
+            nodo.izquierda = self._eliminar(nodo.izquierda, clave, eliminado)
+        elif clave > nodo.evento.clave():
+            nodo.derecha = self._eliminar(nodo.derecha, clave, eliminado)
+        else:
+            eliminado.append(nodo.evento)
+            if nodo.izquierda is None:
+                return nodo.derecha
+            if nodo.derecha is None:
+                return nodo.izquierda
+            sucesor = self._minimo(nodo.derecha)
+            nodo.evento = sucesor.evento
+            nodo.derecha = self._eliminar_sucesor(nodo.derecha, sucesor.evento.clave())
+        return nodo
+  
+    def _eliminar_sucesor(
+        self, nodo: Optional[NodoArbol], clave: Clave
+    ) -> Optional[NodoArbol]:
+        if nodo is None:
+            return None
+        if clave < nodo.evento.clave():
+            nodo.izquierda = self._eliminar_sucesor(nodo.izquierda, clave)
+        elif clave > nodo.evento.clave():
+            nodo.derecha = self._eliminar_sucesor(nodo.derecha, clave)
+        else:
+            return nodo.derecha if nodo.izquierda is None else nodo.izquierda
+        return nodo
+
+    @staticmethod
+    def _minimo(nodo: NodoArbol) -> NodoArbol:
+        while nodo.izquierda is not None:
+            nodo = nodo.izquierda
+        return nodo

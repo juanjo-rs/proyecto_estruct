@@ -1,12 +1,28 @@
 ---
-description: Tutoría SismoLab AVL — roles, plan y explicación bajo demanda
+description: Tutoría SismoLab AVL — restricciones, docs por tarea y comentarios
 alwaysApply: true
 ---
 
 # SismoLab — contexto de tutoría
 
 - Plan: `docs/WORKPLAN.md`. Guía: `docs/GUIA_IMPLEMENTACION.md`. Enunciado: PDF en `docs/`.
-- Juan Jose: estructuras (AVL/BST, estrés, archivo, rotaciones, tests). Tutor: validar decisiones vs PDF antes de codear.
-- Flujo: decisión 5–10 líneas → validación → implementar con prueba.
-- Si Juan Jose no entiende algo (concepto, término, decisión, código, error): **explicarlo** de forma clara (idea simple → por qué importa en el enunciado → ejemplo corto). No asumir que ya lo sabe; puede pedirlo en cualquier momento.
-- No negociable: clave `(P,M,I)`, pila/cola propias, AVL central, JSON sin ruta fija, GUI separada, sin libs de árboles/pilas/colas/colecciones ordenadas.
+- Juan Jose: estructuras (AVL/BST, estrés, archivo, rotaciones, tests). Tutor: validar vs PDF antes de codear.
+- Flujo: decisión 5–10 líneas → validación → Juan Jose implementa → prueba → documentación corta de la tarea.
+- Si no entiende algo: explicar en español (idea → por qué importa en el enunciado → ejemplo). Si el tutor agrega código, explicar en español qué hace y por qué funciona.
+- Trabajar solo en la tarea pedida; no completar el proyecto entero de golpe.
+- No cambiar APIs de otros módulos sin explicarlo y sin razón necesaria.
+
+## No negociable
+
+- Solo biblioteca estándar de Python + estructuras propias del proyecto.
+- Sin libs externas de AVL/BST, colecciones ordenadas, pilas o colas.
+- AVL central ordenado por `(prioridad, magnitud, identificador)`.
+- GUI y negocio separados; la GUI no muta nodos ni rota árboles.
+- Carga atómica: si falla validación, el escenario anterior no cambia.
+- Comentarios **en el código en inglés** (lo exige el enunciado).
+- Cada caso nuevo lleva prueba `unittest`.
+
+## Documentación y comentarios (Juan Jose)
+
+- Al cerrar cada tarea suya: dejar una nota corta en `docs/` (qué se hizo, cómo probarlo, decisiones).
+- Toda función nueva: docstring o comentario breve en inglés.

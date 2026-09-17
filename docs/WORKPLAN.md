@@ -24,11 +24,13 @@ Criterio: Juan Jose tiene **más tiempo y ganas de aprender estructuras**; Samue
 
 1. Antes de implementar una tarea de estructuras: Juan Jose escribe en 5–10 líneas la decisión (qué, por qué, costo).
 2. Tutor valida contra PDF/guía (aceptar / ajustar / rechazar con motivo).
-3. Luego se implementa; cada PR/cambio trae prueba + comentario en inglés si la regla no es obvia.
+3. Luego se implementa (preferible que codee Juan Jose); cada cambio trae prueba + comentario/docstring en inglés en funciones nuevas.
 4. Samuel/Jefferson revisan integración (catálogo/GUI) cuando toque su frontera.
 5. **Explicar sin asumir:** si Juan Jose no entiende un concepto, término, decisión o fragmento de código, el tutor lo explica con claridad (idea simple → por qué importa en el PDF → ejemplo corto). Puede pedir la explicación en cualquier momento; no bloquea el avance.
+6. **Documentación por tarea:** al cerrar una tarea de Juan Jose, añadir una nota corta en `docs/` (objetivo, archivos tocados, cómo probar, decisiones). El tutor explica en español el código que agregue.
+7. **Alcance:** solo la tarea pedida; no completar el proyecto entero. No cambiar APIs ajenas sin motivo explícito.
 
-**No negociable (ya cerrado por el PDF):** clave `(P,M,I)`, prioridad, pila/cola propias, AVL central (no lista ordenada), JSON sin ruta fija, GUI separada de negocio, sin libs de árboles/pilas/colas/colecciones ordenadas.
+**No negociable (ya cerrado por el PDF):** solo stdlib + estructuras propias; clave `(P,M,I)`; pila/cola propias; AVL central (no lista ordenada); JSON sin ruta fija; carga atómica; GUI separada de negocio; sin libs de árboles/pilas/colas/colecciones ordenadas; comentarios de código en inglés; unittest en casos nuevos.
 
 **Decisión conjunta #1 (cerrar en la primera sesión de equipo):** política de réplica determinista. Propuesta guía: mayor magnitud → ocurrencia más cercana anterior → ID menor. Samuel documenta; Juan Jose y Jefferson aprueban; tutor valida.
 

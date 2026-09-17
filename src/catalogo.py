@@ -186,6 +186,7 @@ class CatalogoSismico:
             self._registrar_instantanea(f"Corregir SIS-{identificador:06d}")
         if candidato.clave() != clave_anterior:
             self.avl.eliminar(clave_anterior, balancear=not self.modo_estres)
+            self.bst.eliminar(clave_anterior )
         evento.magnitud = candidato.magnitud
         evento.profundidad_hipocentro = candidato.profundidad_hipocentro
         evento.x = candidato.x
@@ -197,6 +198,8 @@ class CatalogoSismico:
         evento.estado = EstadoAtencion.PENDIENTE
         if candidato.clave() != clave_anterior:
             self.avl.insertar(evento, balancear=not self.modo_estres)
+            self.bst.insertar(evento)
+
         self.metricas["correcciones_aceptadas"] += 1
         return evento
 
@@ -213,6 +216,7 @@ class CatalogoSismico:
         if evento is None:
             raise KeyError("No existe un evento activo con ese identificador.")
         self._registrar_instantanea(f"Eliminar SIS-{identificador:06d}")
+        self.bst.eliminar(evento.clave())
         retirado = self.avl.eliminar(evento.clave(), balancear=not self.modo_estres)
         del self.indice_activos[identificador]
         self.eliminados.add(identificador)
