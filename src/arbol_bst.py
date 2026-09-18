@@ -73,6 +73,8 @@ class ArbolBST:
         return eliminado[0]
 
     def _eliminar(
+        # Delete by key using the classic 0/1/2-child BST cases (no rotations)
+
         self, nodo: Optional[NodoArbol], clave: Clave,eliminado: list[Evento]
     ) -> Optional[NodoArbol]:
         if nodo is None:
