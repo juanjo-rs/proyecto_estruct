@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timezone
 from unittest import TestCase
 
@@ -9,11 +10,11 @@ from src.dominio import EstadoAtencion, Evento, Reporte, Zona
 RELOJ = datetime(2026, 9, 7, 12, 0, tzinfo=timezone.utc)
 
 
-def evento(identificador: int, magnitud: float = 4.5, revision: int = 1, estacion: str = "EST-01") -> Evento:
+def evento(identificador: int, magnitud: float = 4.5, revision: int = 1, estacion: str = "EST-01", profundidad_hipocentro: float = 30.0) -> Evento:
     return Evento(
         identificador=identificador,
         magnitud=magnitud,
-        profundidad_hipocentro=30.0,
+        profundidad_hipocentro=profundidad_hipocentro,
         x=100.0,
         y=100.0,
         ocurrencia="2026-09-07T10:00:00Z",
@@ -149,4 +150,85 @@ class PruebasBase(TestCase):
                         [y.identificador for y in self.catalogo.bst.inorden()])
         self.catalogo.eliminar_evento(20)
         self.assertEqual([x.identificador for x in self.catalogo.avl.inorden()],
-                        [y.identificador for y in self.catalogo.bst.inorden()])     
+                        [y.identificador for y in self.catalogo.bst.inorden()])
+
+    def test_exportar_escenario_completo_contiene_todos_los_elementos(self) -> None:
+        # Create a non-trivial topology with different priorities
+        self.catalogo.crear_evento(evento(10, magnitud=4.0, estacion="EST-01"))  # Low priority
+        self.catalogo.crear_evento(evento(20, magnitud=5.0, estacion="EST-02"))  # Medium priority
+        self.catalogo.crear_evento(evento(30, magnitud=6.5, estacion="EST-03"))  # High priority (>= 6.0)
+        self.catalogo.crear_evento(evento(40, magnitud=4.8, profundidad_hipocentro=25.0, estacion="EST-04"))  # High priority (shallow + populated zone)
+
+        # Enqueue a report - normalize the event first
+        evento_reporte = evento(50, magnitud=5.5, estacion="EST-05")
+        self.catalogo._normalizar_y_clasificar(evento_reporte)
+        self.catalogo.encolar_reporte(Reporte(evento_reporte, "EST-05"))
+
+        # Change parameters
+        self.catalogo.parametros = {"W": 100, "R": 50, "L": 200, "T": 30}
+
+        # Export the scenario
+        datos = self.catalogo.exportar_escenario_completo()
+
+        # Verify all required fields are present
+        self.assertEqual(datos["version"], 1)
+        self.assertEqual(datos["tipo_guardado"], "escenario_completo")
+        self.assertIn("reloj", datos)
+        self.assertIn("modo", datos)
+        self.assertIn("cola_pausada", datos)
+        self.assertIn("parametros", datos)
+        self.assertIn("zonas", datos)
+        self.assertIn("estaciones", datos)
+        self.assertIn("avl", datos)
+        self.assertIn("eventos_activos", datos)
+        self.assertIn("eventos_historicos", datos)
+        self.assertIn("ids_eliminados", datos)
+        self.assertIn("cola_fifo", datos)
+        self.assertIn("historial", datos)
+        self.assertIn("metricas", datos)
+        self.assertIn("estado_atencion", datos)
+        self.assertIn("asociaciones", datos)
+
+        # Verify AVL topology structure
+        self.assertIn("raiz", datos["avl"])
+        self.assertIn("nodos", datos["avl"])
+        self.assertEqual(len(datos["avl"]["nodos"]), 4)  # 4 active events
+
+        # Verify each node has required structural links
+        for nodo_id, nodo_data in datos["avl"]["nodos"].items():
+            self.assertIn("evento", nodo_data)
+            self.assertIn("altura", nodo_data)
+            self.assertIn("factor", nodo_data)
+            self.assertIn("izquierdo", nodo_data)
+            self.assertIn("derecho", nodo_data)
+
+        # Verify events are in active index
+        self.assertEqual(len(datos["eventos_activos"]), 4)
+        for eid in [10, 20, 30, 40]:
+            self.assertIn(eid, datos["eventos_activos"])
+
+        # Verify queue has one report
+        self.assertEqual(len(datos["cola_fifo"]), 1)
+
+        # Verify parameters are exported
+        self.assertEqual(datos["parametros"]["W"], 100)
+        self.assertEqual(datos["parametros"]["R"], 50)
+        self.assertEqual(datos["parametros"]["L"], 200)
+        self.assertEqual(datos["parametros"]["T"], 30)
+
+        # Verify stations are collected
+        self.assertIn("EST-01", datos["estaciones"])
+        self.assertIn("EST-02", datos["estaciones"])
+        self.assertIn("EST-03", datos["estaciones"])
+        self.assertIn("EST-04", datos["estaciones"])
+        self.assertIn("EST-05", datos["estaciones"])
+
+        # Verify JSON can be serialized by json.dumps
+        json_str = json.dumps(datos)
+        self.assertIsInstance(json_str, str)
+        self.assertGreater(len(json_str), 0)
+
+        # Verify round-trip: deserialize and check structure
+        datos_cargados = json.loads(json_str)
+        self.assertEqual(datos_cargados["version"], 1)
+        self.assertEqual(len(datos_cargados["avl"]["nodos"]), 4)     

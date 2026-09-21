@@ -254,3 +254,39 @@ class ArbolAVL:
             balanceado=not any(error.startswith("Desbalance") for error in errores),
             errores=errores,
         )
+
+    def exportar_topologia(self) -> dict:
+        """Export the AVL topology as a JSON-serializable dict using only IDs for links."""
+        nodos_dict: dict[int, dict] = {}
+
+        def serializar_evento(evento: Evento) -> dict:
+            """Convert an Evento to a JSON-serializable dict."""
+            return {
+                "identificador": evento.identificador,
+                "magnitud": float(evento.magnitud),
+                "profundidad_hipocentro": float(evento.profundidad_hipocentro),
+                "x": float(evento.x),
+                "y": float(evento.y),
+                "ocurrencia": evento.ocurrencia.isoformat(),
+                "revision": evento.revision,
+                "estaciones": list(evento.estaciones),
+            }
+
+        def recorrer(nodo: Optional[NodoArbol]) -> None:
+            if nodo is None:
+                return
+            recorrer(nodo.izquierda)
+            recorrer(nodo.derecha)
+            nodos_dict[nodo.evento.identificador] = {
+                "evento": serializar_evento(nodo.evento),
+                "altura": nodo.altura,
+                "factor": self._factor(nodo),
+                "izquierdo": nodo.izquierda.evento.identificador if nodo.izquierda else None,
+                "derecho": nodo.derecha.evento.identificador if nodo.derecha else None,
+            }
+
+        recorrer(self.raiz)
+        return {
+            "raiz": self.raiz.evento.identificador if self.raiz else None,
+            "nodos": nodos_dict,
+        }

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -296,3 +297,79 @@ class CatalogoSismico:
             raise ValueError("El reloj de simulacion no puede retroceder.")
         self._registrar_instantanea("Avanzar reloj de simulacion")
         self.reloj = nuevo
+
+    def exportar_escenario_completo(self) -> dict:
+        """Export the complete scenario as a JSON-serializable dict according to the contract."""
+        def serializar_zona(zona: Zona) -> dict:
+            return {
+                "nombre": zona.nombre,
+                "x_min": float(zona.x_min),
+                "x_max": float(zona.x_max),
+                "y_min": float(zona.y_min),
+                "y_max": float(zona.y_max),
+                "poblada": zona.poblada,
+            }
+
+        def serializar_evento(evento: Evento) -> dict:
+            return {
+                "identificador": evento.identificador,
+                "magnitud": float(evento.magnitud),
+                "profundidad_hipocentro": float(evento.profundidad_hipocentro),
+                "x": float(evento.x),
+                "y": float(evento.y),
+                "ocurrencia": evento.ocurrencia.isoformat(),
+                "revision": evento.revision,
+                "estaciones": list(evento.estaciones),
+                "estado": evento.estado.value,
+                "en_zona_poblada": evento.en_zona_poblada,
+                "prioridad": evento.prioridad,
+            }
+
+        def serializar_reporte(reporte: Reporte) -> dict:
+            return {
+                "evento": serializar_evento(reporte.evento),
+                "estacion": reporte.estacion,
+            }
+
+        # Collect all unique stations from active, archived events, and pending reports
+        todas_estaciones = set()
+        for evento in self.indice_activos.values():
+            todas_estaciones.update(evento.estaciones)
+        for evento in self.archivados.values():
+            todas_estaciones.update(evento.estaciones)
+        for reporte in self.reportes_pendientes:
+            todas_estaciones.add(reporte.estacion)
+            todas_estaciones.update(reporte.evento.estaciones)
+
+        return {
+            "version": 1,
+            "tipo_guardado": "escenario_completo",
+            "reloj": self.reloj.isoformat(),
+            "modo": "estres" if self.modo_estres else "normal",
+            "cola_pausada": self.cola_pausada,
+            "parametros": {
+                "W": self.parametros.get("W"),
+                "R": self.parametros.get("R"),
+                "L": self.parametros.get("L"),
+                "T": self.parametros.get("T"),
+            },
+            "zonas": [serializar_zona(zona) for zona in self.zonas],
+            "estaciones": sorted(list(todas_estaciones)),
+            "avl": self.avl.exportar_topologia(),
+            "eventos_activos": {eid: serializar_evento(evt) for eid, evt in self.indice_activos.items()},
+            "eventos_historicos": {eid: serializar_evento(evt) for eid, evt in self.archivados.items()},
+            "ids_eliminados": sorted(list(self.eliminados)),
+            "cola_fifo": [serializar_reporte(reporte) for reporte in self.reportes_pendientes],
+            "historial": [{"descripcion": snap.descripcion} for snap in self.historial._elementos],
+            "metricas": self.metricas.copy(),
+            "estado_atencion": {
+                eid: evt.estado.value for eid, evt in self.indice_activos.items()
+            },
+            "asociaciones": self.asociaciones.copy(),
+        }
+
+
+def escribir_json_escenario(datos: dict, ruta: str) -> None:
+    """Write the scenario dict to a JSON file with UTF-8 encoding and readable indentation."""
+    with open(ruta, "w", encoding="utf-8") as f:
+        json.dump(datos, f, indent=2, ensure_ascii=False)
