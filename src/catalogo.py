@@ -400,6 +400,266 @@ class CatalogoSismico:
             },
         }
 
+    def _validar_topologia(self, nodos_dict: dict, raiz_id: Optional[int], modo: str) -> list[str]:
+        """Validate topology references, cycles, uniqueness, BST order, heights, and factors."""
+        errores: list[str] = []
+
+        if raiz_id is None and nodos_dict:
+            errores.append("Raiz es null pero existen nodos.")
+            return errores
+
+        if raiz_id is not None and raiz_id not in nodos_dict:
+            errores.append(f"Raiz {raiz_id} no existe en nodos.")
+            return errores
+
+        # Validate all references exist
+        for nodo_id, nodo_data in nodos_dict.items():
+            izquierdo_id = nodo_data["izquierdo"]
+            derecho_id = nodo_data["derecho"]
+            if izquierdo_id is not None and izquierdo_id not in nodos_dict:
+                errores.append(f"Nodo {nodo_id} referencia izquierdo inexistente: {izquierdo_id}.")
+            if derecho_id is not None and derecho_id not in nodos_dict:
+                errores.append(f"Nodo {nodo_id} referencia derecho inexistente: {derecho_id}.")
+
+        if errores:
+            return errores
+
+        # Validate uniqueness of position (each node is child of at most one parent)
+        hijos_contados: dict[int, int] = {}
+        for nodo_data in nodos_dict.values():
+            izquierdo_id = nodo_data["izquierdo"]
+            derecho_id = nodo_data["derecho"]
+            if izquierdo_id is not None:
+                hijos_contados[izquierdo_id] = hijos_contados.get(izquierdo_id, 0) + 1
+            if derecho_id is not None:
+                hijos_contados[derecho_id] = hijos_contados.get(derecho_id, 0) + 1
+
+        for hijo_id, count in hijos_contados.items():
+            if count > 1:
+                errores.append(f"Nodo {hijo_id} es hijo de mas de un padre ({count} padres).")
+
+        if raiz_id is not None and hijos_contados.get(raiz_id, 0) > 0:
+            errores.append(f"Raiz {raiz_id} tambien es hijo de otro nodo.")
+
+        # Validate all nodes are reachable from root
+        if raiz_id is not None:
+            visitados = set()
+
+            def dfs_alcanzable(nodo_id: int) -> None:
+                if nodo_id in visitados:
+                    return
+                visitados.add(nodo_id)
+                nodo_data = nodos_dict[nodo_id]
+                izquierdo_id = nodo_data["izquierdo"]
+                derecho_id = nodo_data["derecho"]
+                if izquierdo_id is not None:
+                    dfs_alcanzable(izquierdo_id)
+                if derecho_id is not None:
+                    dfs_alcanzable(derecho_id)
+
+            dfs_alcanzable(raiz_id)
+            for nodo_id in nodos_dict:
+                if nodo_id not in visitados:
+                    errores.append(f"Nodo {nodo_id} no es alcanzable desde la raiz.")
+
+        # Validate no cycles using DFS with current path tracking (must run before other validations)
+        if raiz_id is not None:
+            visitados_completos = set()
+
+            def dfs_ciclo(nodo_id: int, camino_actual: set[int]) -> bool:
+                if nodo_id in camino_actual:
+                    errores.append(f"Ciclo detectado: nodo {nodo_id} ya esta en el camino actual.")
+                    return True
+                if nodo_id in visitados_completos:
+                    return False
+
+                visitados_completos.add(nodo_id)
+                nuevo_camino = camino_actual | {nodo_id}
+                nodo_data = nodos_dict[nodo_id]
+                izquierdo_id = nodo_data["izquierdo"]
+                derecho_id = nodo_data["derecho"]
+
+                ciclo_encontrado = False
+                if izquierdo_id is not None:
+                    if dfs_ciclo(izquierdo_id, nuevo_camino):
+                        ciclo_encontrado = True
+                if derecho_id is not None:
+                    if dfs_ciclo(derecho_id, nuevo_camino):
+                        ciclo_encontrado = True
+                return ciclo_encontrado
+
+            if dfs_ciclo(raiz_id, set()):
+                return errores  # Return early if cycle found
+
+        # Validate global BST order with propagated limits
+        if raiz_id is not None:
+            visitados_orden = set()
+
+            def dfs_orden(nodo_id: int, min_key: Optional[Clave], max_key: Optional[Clave]) -> None:
+                if nodo_id in visitados_orden:
+                    return
+                visitados_orden.add(nodo_id)
+
+                nodo_data = nodos_dict[nodo_id]
+                evento_dict = nodo_data["evento"]
+                evento = Evento(
+                    identificador=evento_dict["identificador"],
+                    magnitud=Decimal(str(evento_dict["magnitud"])),
+                    profundidad_hipocentro=Decimal(str(evento_dict["profundidad_hipocentro"])),
+                    x=Decimal(str(evento_dict["x"])),
+                    y=Decimal(str(evento_dict["y"])),
+                    ocurrencia=evento_dict["ocurrencia"],
+                    revision=evento_dict["revision"],
+                    estaciones=set(evento_dict["estaciones"]),
+                )
+                evento.en_zona_poblada = clasificar_zona_poblada(evento, self.zonas)
+                evento.prioridad = calcular_prioridad(evento)
+                clave = evento.clave()
+
+                if min_key is not None and clave <= min_key:
+                    errores.append(f"Orden BST global invalido en nodo {nodo_id}: clave {clave} <= minimo {min_key}.")
+                if max_key is not None and clave >= max_key:
+                    errores.append(f"Orden BST global invalido en nodo {nodo_id}: clave {clave} >= maximo {max_key}.")
+
+                izquierdo_id = nodo_data["izquierdo"]
+                derecho_id = nodo_data["derecho"]
+                if izquierdo_id is not None:
+                    dfs_orden(izquierdo_id, min_key, clave)
+                if derecho_id is not None:
+                    dfs_orden(derecho_id, clave, max_key)
+
+            dfs_orden(raiz_id, None, None)
+
+        # Validate heights and factors are coherent
+        if raiz_id is not None:
+            def dfs_alturas(nodo_id: int) -> int:
+                nodo_data = nodos_dict[nodo_id]
+                izquierdo_id = nodo_data["izquierdo"]
+                derecho_id = nodo_data["derecho"]
+
+                altura_izq = dfs_alturas(izquierdo_id) if izquierdo_id is not None else -1
+                altura_der = dfs_alturas(derecho_id) if derecho_id is not None else -1
+
+                altura_esperada = 1 + max(altura_izq, altura_der)
+                altura_almacenada = nodo_data["altura"]
+                if altura_almacenada != altura_esperada:
+                    errores.append(f"Altura incoherente en nodo {nodo_id}: almacenada {altura_almacenada}, esperada {altura_esperada}.")
+
+                factor_esperado = altura_izq - altura_der
+                # Factor is not stored in JSON but should be validated if present
+                return altura_almacenada
+
+            dfs_alturas(raiz_id)
+
+        return errores
+
+    def cargar_por_topologia(self, datos: dict) -> dict:
+        """Load events from JSON topology mode with full validation and atomic replacement."""
+        # Validate format
+        if datos.get("version") != 1:
+            raise ValueError("Version de JSON no soportada.")
+        if datos.get("tipo_carga") != "topologia":
+            raise ValueError("El JSON no es del tipo 'topologia'.")
+
+        # Validate and parse zones
+        zonas_json = datos.get("zonas", [])
+        zonas = []
+        for zona_json in zonas_json:
+            zona = Zona(
+                nombre=zona_json["nombre"],
+                x_min=Decimal(str(zona_json["x_min"])),
+                x_max=Decimal(str(zona_json["x_max"])),
+                y_min=Decimal(str(zona_json["y_min"])),
+                y_max=Decimal(str(zona_json["y_max"])),
+                poblada=zona_json["poblada"],
+            )
+            zonas.append(zona)
+
+        # Validate and parse clock
+        reloj_nuevo = fecha_utc(datos["reloj"])
+
+        # Validate mode
+        modo = datos.get("modo", "normal")
+        if modo not in ("normal", "estres"):
+            raise ValueError("El modo debe ser 'normal' o 'estres'.")
+
+        # Get topology data
+        nodos_dict = datos.get("nodos", {})
+        raiz_id = datos.get("raiz")
+
+        # Validate IDs don't conflict with existing scenario
+        for nodo_id in nodos_dict.keys():
+            if nodo_id in self.indice_activos:
+                raise ValueError(f"ID {nodo_id} ya existe como evento activo.")
+            if nodo_id in self.archivados:
+                raise ValueError(f"ID {nodo_id} ya existe en historico.")
+            if nodo_id in self.eliminados:
+                raise ValueError(f"ID {nodo_id} fue eliminado y no puede reutilizarse.")
+
+        # Validate topology structure
+        errores_topologia = self._validar_topologia(nodos_dict, raiz_id, modo)
+        if errores_topologia:
+            raise ValueError("Errores de topologia: " + "; ".join(errores_topologia))
+
+        # Build temporary AVL from topology
+        avl_temp = ArbolAVL()
+        avl_temp.raiz = ArbolAVL._construir_desde_topologia(nodos_dict, raiz_id)
+
+        # Build BST from topology (same structure, no balancing)
+        bst_temp = ArbolBST()
+        bst_temp.raiz = ArbolAVL._construir_desde_topologia(nodos_dict, raiz_id)
+
+        # Build index from events
+        indice_temp: dict[int, Evento] = {}
+        for nodo_id, nodo_data in nodos_dict.items():
+            evento_dict = nodo_data["evento"]
+            evento = Evento(
+                identificador=evento_dict["identificador"],
+                magnitud=Decimal(str(evento_dict["magnitud"])),
+                profundidad_hipocentro=Decimal(str(evento_dict["profundidad_hipocentro"])),
+                x=Decimal(str(evento_dict["x"])),
+                y=Decimal(str(evento_dict["y"])),
+                ocurrencia=evento_dict["ocurrencia"],
+                revision=evento_dict["revision"],
+                estaciones=set(evento_dict["estaciones"]),
+            )
+            # Validate event with new clock and zones
+            evento.validar(reloj_nuevo)
+            evento.en_zona_poblada = clasificar_zona_poblada(evento, zonas)
+            evento.prioridad = calcular_prioridad(evento)
+            indice_temp[evento.identificador] = evento
+
+        # If normal mode, validate AVL is balanced
+        if modo == "normal":
+            auditoria = avl_temp.auditar()
+            if not auditoria.balanceado:
+                raise ValueError("Topologia desbalanceada no permitida en modo normal.")
+
+        # All validations passed - atomically replace scenario
+        self._registrar_instantanea("Carga por topologia")
+        self.zonas = zonas
+        self.reloj = reloj_nuevo
+        self.avl = avl_temp
+        self.bst = bst_temp
+        self.indice_activos = indice_temp
+        self.modo_estres = (modo == "estres")
+
+        # Return statistics
+        return {
+            "avl": {
+                "raiz_id": self.avl.raiz.evento.identificador if self.avl.raiz else None,
+                "altura": self.avl.altura(),
+                "profundidad_maxima": self.avl.profundidad_maxima(),
+                "cantidad_hojas": self.avl.cantidad_hojas(),
+            },
+            "bst": {
+                "raiz_id": self.bst.raiz.evento.identificador if self.bst.raiz else None,
+                "altura": self.bst.altura(),
+                "profundidad_maxima": self.bst.profundidad_maxima(),
+                "cantidad_hojas": self.bst.cantidad_hojas(),
+            },
+        }
+
     def exportar_escenario_completo(self) -> dict:
         """Export the complete scenario as a JSON-serializable dict according to the contract."""
         def serializar_zona(zona: Zona) -> dict:

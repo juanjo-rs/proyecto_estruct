@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Generator, Optional
 
 from .dominio import Evento
@@ -304,3 +305,39 @@ class ArbolAVL:
             "raiz": self.raiz.evento.identificador if self.raiz else None,
             "nodos": nodos_dict,
         }
+
+    @classmethod
+    def _construir_desde_topologia(cls, nodos_dict: dict, raiz_id: Optional[int]) -> Optional[NodoArbol]:
+        """Build an AVL tree from a topology dict without using insert()."""
+        if raiz_id is None:
+            return None
+
+        # Create all nodes first
+        nodos_por_id: dict[int, NodoArbol] = {}
+        for nodo_id, nodo_data in nodos_dict.items():
+            evento_dict = nodo_data["evento"]
+            evento = Evento(
+                identificador=evento_dict["identificador"],
+                magnitud=Decimal(str(evento_dict["magnitud"])),
+                profundidad_hipocentro=Decimal(str(evento_dict["profundidad_hipocentro"])),
+                x=Decimal(str(evento_dict["x"])),
+                y=Decimal(str(evento_dict["y"])),
+                ocurrencia=evento_dict["ocurrencia"],
+                revision=evento_dict["revision"],
+                estaciones=set(evento_dict["estaciones"]),
+            )
+            nodo = NodoArbol(evento)
+            nodo.altura = nodo_data["altura"]
+            nodos_por_id[nodo_id] = nodo
+
+        # Link nodes by ID
+        for nodo_id, nodo_data in nodos_dict.items():
+            nodo = nodos_por_id[nodo_id]
+            izquierdo_id = nodo_data["izquierdo"]
+            derecho_id = nodo_data["derecho"]
+            if izquierdo_id is not None:
+                nodo.izquierda = nodos_por_id[izquierdo_id]
+            if derecho_id is not None:
+                nodo.derecha = nodos_por_id[derecho_id]
+
+        return nodos_por_id[raiz_id]

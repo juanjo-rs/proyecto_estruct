@@ -405,4 +405,330 @@ class PruebasBase(TestCase):
         }
 
         with self.assertRaises(ValueError):
-            self.catalogo.cargar_por_inserciones(datos)     
+            self.catalogo.cargar_por_inserciones(datos)
+
+    def test_cargar_por_topologia_valida_normal(self) -> None:
+        # Create a valid balanced topology
+        datos = {
+            "version": 1,
+            "tipo_carga": "topologia",
+            "reloj": "2026-09-07T14:00:00Z",
+            "modo": "normal",
+            "zonas": [
+                {
+                    "nombre": "Ciudad",
+                    "x_min": 0.0,
+                    "x_max": 500.0,
+                    "y_min": 0.0,
+                    "y_max": 500.0,
+                    "poblada": True,
+                }
+            ],
+            "raiz": 20,
+            "nodos": {
+                10: {
+                    "evento": {
+                        "identificador": 10,
+                        "magnitud": 4.0,
+                        "profundidad_hipocentro": 50.0,
+                        "x": 100.0,
+                        "y": 100.0,
+                        "ocurrencia": "2026-09-07T10:00:00Z",
+                        "revision": 1,
+                        "estaciones": ["EST-01"],
+                    },
+                    "altura": 0,
+                    "izquierdo": None,
+                    "derecho": None,
+                },
+                20: {
+                    "evento": {
+                        "identificador": 20,
+                        "magnitud": 5.0,
+                        "profundidad_hipocentro": 50.0,
+                        "x": 200.0,
+                        "y": 200.0,
+                        "ocurrencia": "2026-09-07T11:00:00Z",
+                        "revision": 1,
+                        "estaciones": ["EST-02"],
+                    },
+                    "altura": 1,
+                    "izquierdo": 10,
+                    "derecho": None,
+                },
+            },
+        }
+
+        estadisticas = self.catalogo.cargar_por_topologia(datos)
+        self.assertEqual(len(self.catalogo.indice_activos), 2)
+        self.assertIn(10, self.catalogo.indice_activos)
+        self.assertIn(20, self.catalogo.indice_activos)
+        self.assertTrue(self.catalogo.avl.auditar().balanceado)
+
+    def test_cargar_por_topologia_valida_estres(self) -> None:
+        # Create an unbalanced topology (only allowed in stress mode)
+        datos = {
+            "version": 1,
+            "tipo_carga": "topologia",
+            "reloj": "2026-09-07T14:00:00Z",
+            "modo": "estres",
+            "zonas": [],
+            "raiz": 30,
+            "nodos": {
+                10: {
+                    "evento": {
+                        "identificador": 10,
+                        "magnitud": 4.0,
+                        "profundidad_hipocentro": 50.0,
+                        "x": 100.0,
+                        "y": 100.0,
+                        "ocurrencia": "2026-09-07T10:00:00Z",
+                        "revision": 1,
+                        "estaciones": ["EST-01"],
+                    },
+                    "altura": 0,
+                    "izquierdo": None,
+                    "derecho": None,
+                },
+                20: {
+                    "evento": {
+                        "identificador": 20,
+                        "magnitud": 4.5,
+                        "profundidad_hipocentro": 50.0,
+                        "x": 150.0,
+                        "y": 150.0,
+                        "ocurrencia": "2026-09-07T10:30:00Z",
+                        "revision": 1,
+                        "estaciones": ["EST-02"],
+                    },
+                    "altura": 1,
+                    "izquierdo": 10,
+                    "derecho": None,
+                },
+                30: {
+                    "evento": {
+                        "identificador": 30,
+                        "magnitud": 5.0,
+                        "profundidad_hipocentro": 50.0,
+                        "x": 200.0,
+                        "y": 200.0,
+                        "ocurrencia": "2026-09-07T11:00:00Z",
+                        "revision": 1,
+                        "estaciones": ["EST-03"],
+                    },
+                    "altura": 2,
+                    "izquierdo": 20,
+                    "derecho": None,
+                },
+            },
+        }
+
+        estadisticas = self.catalogo.cargar_por_topologia(datos)
+        self.assertEqual(len(self.catalogo.indice_activos), 3)
+        self.assertTrue(self.catalogo.modo_estres)
+        # AVL should be unbalanced in stress mode
+        self.assertFalse(self.catalogo.avl.auditar().balanceado)
+
+    def test_cargar_por_topologia_referencia_rota_falla_atomicamente(self) -> None:
+        # Create initial event
+        self.catalogo.crear_evento(evento(10))
+
+        # Try to load with broken reference
+        datos = {
+            "version": 1,
+            "tipo_carga": "topologia",
+            "reloj": "2026-09-07T14:00:00Z",
+            "modo": "normal",
+            "zonas": [],
+            "raiz": 20,
+            "nodos": {
+                20: {
+                    "evento": {
+                        "identificador": 20,
+                        "magnitud": 5.0,
+                        "profundidad_hipocentro": 50.0,
+                        "x": 200.0,
+                        "y": 200.0,
+                        "ocurrencia": "2026-09-07T11:00:00Z",
+                        "revision": 1,
+                        "estaciones": ["EST-02"],
+                    },
+                    "altura": 1,
+                    "izquierdo": 999,  # Non-existent reference
+                    "derecho": None,
+                },
+            },
+        }
+
+        with self.assertRaises(ValueError) as context:
+            self.catalogo.cargar_por_topologia(datos)
+        self.assertIn("inexistente", str(context.exception).lower())
+
+        # Verify original scenario is unchanged
+        self.assertEqual(len(self.catalogo.indice_activos), 1)
+        self.assertIn(10, self.catalogo.indice_activos)
+        self.assertNotIn(20, self.catalogo.indice_activos)
+
+    def test_cargar_por_topologia_ciclo_falla_atomicamente(self) -> None:
+        # Create initial event
+        self.catalogo.crear_evento(evento(10))
+
+        # Try to load with a cycle (100 -> 200 -> 100)
+        datos = {
+            "version": 1,
+            "tipo_carga": "topologia",
+            "reloj": "2026-09-07T14:00:00Z",
+            "modo": "normal",
+            "zonas": [],
+            "raiz": 100,
+            "nodos": {
+                100: {
+                    "evento": {
+                        "identificador": 100,
+                        "magnitud": 4.0,
+                        "profundidad_hipocentro": 50.0,
+                        "x": 100.0,
+                        "y": 100.0,
+                        "ocurrencia": "2026-09-07T10:00:00Z",
+                        "revision": 1,
+                        "estaciones": ["EST-01"],
+                    },
+                    "altura": 1,
+                    "izquierdo": None,
+                    "derecho": 200,
+                },
+                200: {
+                    "evento": {
+                        "identificador": 200,
+                        "magnitud": 5.0,
+                        "profundidad_hipocentro": 50.0,
+                        "x": 200.0,
+                        "y": 200.0,
+                        "ocurrencia": "2026-09-07T11:00:00Z",
+                        "revision": 1,
+                        "estaciones": ["EST-02"],
+                    },
+                    "altura": 0,
+                    "izquierdo": None,
+                    "derecho": 100,  # Cycle back to 100
+                },
+            },
+        }
+
+        with self.assertRaises(ValueError) as context:
+            self.catalogo.cargar_por_topologia(datos)
+        self.assertIn("ciclo", str(context.exception).lower())
+
+        # Verify original scenario is unchanged
+        self.assertEqual(len(self.catalogo.indice_activos), 1)
+        self.assertIn(10, self.catalogo.indice_activos)
+
+    def test_cargar_por_topologia_orden_global_invalido_falla_atomicamente(self) -> None:
+        # Create initial event
+        self.catalogo.crear_evento(evento(10))
+
+        # Try to load with invalid global BST order (right child has smaller key)
+        # Parent: (2, 5.0, 300) - medium priority
+        # Right child: (1, 4.0, 100) - lower priority, violates BST order
+        datos = {
+            "version": 1,
+            "tipo_carga": "topologia",
+            "reloj": "2026-09-07T14:00:00Z",
+            "modo": "normal",
+            "zonas": [],
+            "raiz": 300,
+            "nodos": {
+                100: {
+                    "evento": {
+                        "identificador": 100,
+                        "magnitud": 4.0,  # Low priority (1, 4.0, 100)
+                        "profundidad_hipocentro": 50.0,
+                        "x": 100.0,
+                        "y": 100.0,
+                        "ocurrencia": "2026-09-07T10:00:00Z",
+                        "revision": 1,
+                        "estaciones": ["EST-01"],
+                    },
+                    "altura": 0,
+                    "izquierdo": None,
+                    "derecho": None,
+                },
+                300: {
+                    "evento": {
+                        "identificador": 300,
+                        "magnitud": 5.0,  # Medium priority (2, 5.0, 300)
+                        "profundidad_hipocentro": 50.0,
+                        "x": 200.0,
+                        "y": 200.0,
+                        "ocurrencia": "2026-09-07T11:00:00Z",
+                        "revision": 1,
+                        "estaciones": ["EST-02"],
+                    },
+                    "altura": 1,
+                    "izquierdo": None,
+                    "derecho": 100,  # Invalid: right child has smaller key
+                },
+            },
+        }
+
+        with self.assertRaises(ValueError) as context:
+            self.catalogo.cargar_por_topologia(datos)
+        self.assertIn("orden", str(context.exception).lower())
+
+        # Verify original scenario is unchanged
+        self.assertEqual(len(self.catalogo.indice_activos), 1)
+        self.assertIn(10, self.catalogo.indice_activos)
+
+    def test_cargar_por_topologia_altura_incorrecta_falla_atomicamente(self) -> None:
+        # Create initial event
+        self.catalogo.crear_evento(evento(10))
+
+        # Try to load with incorrect height
+        datos = {
+            "version": 1,
+            "tipo_carga": "topologia",
+            "reloj": "2026-09-07T14:00:00Z",
+            "modo": "normal",
+            "zonas": [],
+            "raiz": 200,
+            "nodos": {
+                100: {
+                    "evento": {
+                        "identificador": 100,
+                        "magnitud": 4.0,
+                        "profundidad_hipocentro": 50.0,
+                        "x": 100.0,
+                        "y": 100.0,
+                        "ocurrencia": "2026-09-07T10:00:00Z",
+                        "revision": 1,
+                        "estaciones": ["EST-01"],
+                    },
+                    "altura": 0,
+                    "izquierdo": None,
+                    "derecho": None,
+                },
+                200: {
+                    "evento": {
+                        "identificador": 200,
+                        "magnitud": 5.0,
+                        "profundidad_hipocentro": 50.0,
+                        "x": 200.0,
+                        "y": 200.0,
+                        "ocurrencia": "2026-09-07T11:00:00Z",
+                        "revision": 1,
+                        "estaciones": ["EST-02"],
+                    },
+                    "altura": 5,  # Incorrect: should be 1
+                    "izquierdo": 100,
+                    "derecho": None,
+                },
+            },
+        }
+
+        with self.assertRaises(ValueError) as context:
+            self.catalogo.cargar_por_topologia(datos)
+        self.assertIn("altura", str(context.exception).lower())
+
+        # Verify original scenario is unchanged
+        self.assertEqual(len(self.catalogo.indice_activos), 1)
+        self.assertIn(10, self.catalogo.indice_activos)     
