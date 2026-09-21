@@ -731,4 +731,100 @@ class PruebasBase(TestCase):
 
         # Verify original scenario is unchanged
         self.assertEqual(len(self.catalogo.indice_activos), 1)
-        self.assertIn(10, self.catalogo.indice_activos)     
+        self.assertIn(10, self.catalogo.indice_activos)
+
+    def tearDown(self) -> None:
+        """Clean up version files created during tests."""
+        import shutil
+        from pathlib import Path
+
+        versiones_dir = Path("versiones")
+        if versiones_dir.exists():
+            for archivo in versiones_dir.glob("*.json"):
+                if archivo.name != ".gitkeep":
+                    archivo.unlink()
+
+    def test_guardar_y_restaurar_version(self) -> None:
+        # Create initial events
+        self.catalogo.crear_evento(evento(10))
+        self.catalogo.crear_evento(evento(20))
+        self.catalogo.parametros["W"] = 4.5
+        self.catalogo.metricas["correcciones_aceptadas"] = 5
+
+        # Save version
+        ruta = self.catalogo.guardar_version("test_guardar_restaurar")
+        self.assertIn("versiones/test_guardar_restaurar.json", ruta.replace("\\", "/"))
+
+        # Modify catalog
+        self.catalogo.crear_evento(evento(30))
+        self.catalogo.parametros["W"] = 6.0
+        self.catalogo.metricas["correcciones_aceptadas"] = 10
+
+        # Verify catalog has changed
+        self.assertEqual(len(self.catalogo.indice_activos), 3)
+        self.assertEqual(self.catalogo.parametros["W"], 6.0)
+        self.assertEqual(self.catalogo.metricas["correcciones_aceptadas"], 10)
+
+        # Restore version
+        self.catalogo.restaurar_version("test_guardar_restaurar")
+
+        # Verify catalog is restored
+        self.assertEqual(len(self.catalogo.indice_activos), 2)
+        self.assertIn(10, self.catalogo.indice_activos)
+        self.assertIn(20, self.catalogo.indice_activos)
+        self.assertNotIn(30, self.catalogo.indice_activos)
+        self.assertEqual(self.catalogo.parametros["W"], 4.5)
+        self.assertEqual(self.catalogo.metricas["correcciones_aceptadas"], 5)
+
+    def test_sobrescribir_version_falla(self) -> None:
+        # Save a version
+        self.catalogo.guardar_version("test_sobrescribir")
+
+        # Try to save with the same name
+        with self.assertRaises(ValueError) as context:
+            self.catalogo.guardar_version("test_sobrescribir")
+        self.assertIn("ya existe", str(context.exception).lower())
+
+    def test_restaurar_version_toma_instantanea(self) -> None:
+        # Create initial event
+        self.catalogo.crear_evento(evento(10))
+
+        # Save version
+        self.catalogo.guardar_version("test_instantanea")
+
+        # Modify catalog
+        self.catalogo.crear_evento(evento(20))
+
+        # Restore version (should take snapshot before restoring)
+        self.catalogo.restaurar_version("test_instantanea")
+
+        # Verify only one event after restore
+        self.assertEqual(len(self.catalogo.indice_activos), 1)
+
+        # Undo the restore (should return to state with 2 events)
+        self.catalogo.deshacer()
+        self.assertEqual(len(self.catalogo.indice_activos), 2)
+        self.assertIn(10, self.catalogo.indice_activos)
+        self.assertIn(20, self.catalogo.indice_activos)
+
+    def test_listar_versiones(self) -> None:
+        # Initially no versions (except .gitkeep which is filtered)
+        versiones = self.catalogo.listar_versiones()
+        self.assertEqual(len(versiones), 0)
+
+        # Save some versions
+        self.catalogo.guardar_version("version_list_1")
+        self.catalogo.guardar_version("version_list_2")
+        self.catalogo.guardar_version("version_list_3")
+
+        # List versions
+        versiones = self.catalogo.listar_versiones()
+        self.assertEqual(len(versiones), 3)
+        self.assertIn("version_list_1", versiones)
+        self.assertIn("version_list_2", versiones)
+        self.assertIn("version_list_3", versiones)
+
+    def test_restaurar_version_inexistente_falla(self) -> None:
+        with self.assertRaises(ValueError) as context:
+            self.catalogo.restaurar_version("version_inexistente")
+        self.assertIn("no existe", str(context.exception).lower())     

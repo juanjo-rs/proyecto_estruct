@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import os
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
+from pathlib import Path
 from typing import Iterable, Optional
 
 from .arbol_avl import ArbolAVL
@@ -660,6 +662,184 @@ class CatalogoSismico:
             },
         }
 
+    def guardar_version(self, nombre: str) -> str:
+        """Save the current scenario as a version with the given name."""
+        # Validate version name
+        if not nombre or not nombre.strip():
+            raise ValueError("El nombre de la version no puede estar vacio.")
+        nombre = nombre.strip()
+
+        # Check if version already exists
+        ruta = _obtener_ruta_version(nombre)
+        if ruta.exists():
+            raise ValueError(f"La version '{nombre}' ya existe. Use un nombre diferente o elimine la version existente.")
+
+        # Ensure versions directory exists and is writable
+        versions_dir = Path(VERSIONES_DIR)
+        try:
+            versions_dir.mkdir(exist_ok=True)
+        except PermissionError:
+            raise PermissionError(f"No se puede crear el directorio de versiones '{VERSIONES_DIR}'. Verifique permisos.")
+
+        # Export current scenario
+        datos = self.exportar_escenario_completo()
+
+        # Write to file
+        try:
+            escribir_json_escenario(datos, str(ruta))
+        except PermissionError:
+            raise PermissionError(f"No se puede escribir en '{ruta}'. Verifique permisos.")
+
+        return str(ruta)
+
+    def listar_versiones(self) -> list[str]:
+        """List all available version names."""
+        versions_dir = Path(VERSIONES_DIR)
+        if not versions_dir.exists():
+            return []
+
+        versiones = []
+        for archivo in versions_dir.glob("*.json"):
+            # Skip .gitkeep
+            if archivo.name == ".gitkeep":
+                continue
+            # Remove .json extension
+            nombre = archivo.stem
+            versiones.append(nombre)
+
+        return sorted(versiones)
+
+    def restaurar_version(self, nombre: str) -> None:
+        """Restore a version by name. Takes a D1 snapshot before restoring."""
+        # Validate version exists
+        ruta = _obtener_ruta_version(nombre)
+        if not ruta.exists():
+            raise ValueError(f"La version '{nombre}' no existe.")
+
+        # Take D1 snapshot before restoring
+        self._registrar_instantanea(f"Restaurar version '{nombre}'")
+
+        # Load version data
+        try:
+            datos = leer_json_archivo(str(ruta))
+        except PermissionError:
+            raise PermissionError(f"No se puede leer '{ruta}'. Verifique permisos.")
+
+        # Reconstruct catalog from exported data
+        # Parse zones
+        zonas = []
+        for zona_json in datos["zonas"]:
+            zona = Zona(
+                nombre=zona_json["nombre"],
+                x_min=Decimal(str(zona_json["x_min"])),
+                x_max=Decimal(str(zona_json["x_max"])),
+                y_min=Decimal(str(zona_json["y_min"])),
+                y_max=Decimal(str(zona_json["y_max"])),
+                poblada=zona_json["poblada"],
+            )
+            zonas.append(zona)
+
+        # Parse clock
+        self.reloj = fecha_utc(datos["reloj"])
+
+        # Parse mode
+        self.modo_estres = (datos["modo"] == "estres")
+        self.cola_pausada = datos["cola_pausada"]
+
+        # Parse parameters
+        self.parametros = {
+            "W": datos["parametros"]["W"],
+            "R": datos["parametros"]["R"],
+            "L": datos["parametros"]["L"],
+            "T": datos["parametros"]["T"],
+        }
+
+        # Reconstruct AVL from topology
+        # Convert string keys to int for reconstruction
+        nodos_int: dict[int, dict] = {int(k): v for k, v in datos["avl"]["nodos"].items()}
+        raiz_int = int(datos["avl"]["raiz"]) if datos["avl"]["raiz"] is not None else None
+        avl_temp = ArbolAVL()
+        avl_temp.raiz = ArbolAVL._construir_desde_topologia(nodos_int, raiz_int)
+
+        # Reconstruct BST from topology
+        bst_temp = ArbolBST()
+        bst_temp.raiz = ArbolAVL._construir_desde_topologia(nodos_int, raiz_int)
+
+        # Reconstruct active events index
+        indice_temp: dict[int, Evento] = {}
+        for eid, evento_json in datos["eventos_activos"].items():
+            eid_int = int(eid) if isinstance(eid, str) else eid
+            evento = Evento(
+                identificador=evento_json["identificador"],
+                magnitud=Decimal(str(evento_json["magnitud"])),
+                profundidad_hipocentro=Decimal(str(evento_json["profundidad_hipocentro"])),
+                x=Decimal(str(evento_json["x"])),
+                y=Decimal(str(evento_json["y"])),
+                ocurrencia=evento_json["ocurrencia"],
+                revision=evento_json["revision"],
+                estaciones=set(evento_json["estaciones"]),
+            )
+            evento.estado = EstadoAtencion(evento_json["estado"])
+            evento.en_zona_poblada = evento_json["en_zona_poblada"]
+            evento.prioridad = evento_json["prioridad"]
+            indice_temp[eid_int] = evento
+
+        # Reconstruct archived events
+        archivados_temp: dict[int, Evento] = {}
+        for eid, evento_json in datos["eventos_historicos"].items():
+            eid_int = int(eid) if isinstance(eid, str) else eid
+            evento = Evento(
+                identificador=evento_json["identificador"],
+                magnitud=Decimal(str(evento_json["magnitud"])),
+                profundidad_hipocentro=Decimal(str(evento_json["profundidad_hipocentro"])),
+                x=Decimal(str(evento_json["x"])),
+                y=Decimal(str(evento_json["y"])),
+                ocurrencia=evento_json["ocurrencia"],
+                revision=evento_json["revision"],
+                estaciones=set(evento_json["estaciones"]),
+            )
+            evento.estado = EstadoAtencion(evento_json["estado"])
+            evento.en_zona_poblada = evento_json["en_zona_poblada"]
+            evento.prioridad = evento_json["prioridad"]
+            archivados_temp[eid_int] = evento
+
+        # Reconstruct deleted IDs
+        eliminados_temp = set(int(eid) if isinstance(eid, str) else eid for eid in datos["ids_eliminados"])
+
+        # Reconstruct queue
+        cola_temp = Cola()
+        for reporte_json in datos["cola_fifo"]:
+            evento = Evento(
+                identificador=reporte_json["evento"]["identificador"],
+                magnitud=Decimal(str(reporte_json["evento"]["magnitud"])),
+                profundidad_hipocentro=Decimal(str(reporte_json["evento"]["profundidad_hipocentro"])),
+                x=Decimal(str(reporte_json["evento"]["x"])),
+                y=Decimal(str(reporte_json["evento"]["y"])),
+                ocurrencia=reporte_json["evento"]["ocurrencia"],
+                revision=reporte_json["evento"]["revision"],
+                estaciones=set(reporte_json["evento"]["estaciones"]),
+            )
+            evento.estado = EstadoAtencion(reporte_json["evento"]["estado"])
+            evento.en_zona_poblada = reporte_json["evento"]["en_zona_poblada"]
+            evento.prioridad = reporte_json["evento"]["prioridad"]
+            reporte = Reporte(evento=evento, estacion=reporte_json["estacion"])
+            cola_temp.encolar(reporte)
+
+        # Reconstruct metrics
+        self.metricas = datos["metricas"].copy()
+
+        # Reconstruct associations
+        self.asociaciones = datos["asociaciones"].copy()
+
+        # Atomically replace scenario
+        self.zonas = zonas
+        self.avl = avl_temp
+        self.bst = bst_temp
+        self.indice_activos = indice_temp
+        self.archivados = archivados_temp
+        self.eliminados = eliminados_temp
+        self.reportes_pendientes = cola_temp
+
     def exportar_escenario_completo(self) -> dict:
         """Export the complete scenario as a JSON-serializable dict according to the contract."""
         def serializar_zona(zona: Zona) -> dict:
@@ -741,3 +921,12 @@ def leer_json_archivo(ruta: str) -> dict:
     """Read a JSON file and return the parsed dict."""
     with open(ruta, "r", encoding="utf-8") as f:
         return json.load(f)
+
+
+# Version management - versions are stored in the 'versiones/' directory
+VERSIONES_DIR = "versiones"
+
+
+def _obtener_ruta_version(nombre: str) -> Path:
+    """Get the full path for a version file."""
+    return Path(VERSIONES_DIR) / f"{nombre}.json"

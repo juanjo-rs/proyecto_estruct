@@ -312,6 +312,10 @@ class ArbolAVL:
         if raiz_id is None:
             return None
 
+        # Handle empty tree case
+        if not nodos_dict:
+            return None
+
         # Create all nodes first
         nodos_por_id: dict[int, NodoArbol] = {}
         for nodo_id, nodo_data in nodos_dict.items():
@@ -336,8 +340,15 @@ class ArbolAVL:
             izquierdo_id = nodo_data["izquierdo"]
             derecho_id = nodo_data["derecho"]
             if izquierdo_id is not None:
+                if izquierdo_id not in nodos_por_id:
+                    raise ValueError(f"Referencia izquierdo {izquierdo_id} no existe en nodos.")
                 nodo.izquierda = nodos_por_id[izquierdo_id]
             if derecho_id is not None:
+                if derecho_id not in nodos_por_id:
+                    raise ValueError(f"Referencia derecho {derecho_id} no existe en nodos.")
                 nodo.derecha = nodos_por_id[derecho_id]
+
+        if raiz_id not in nodos_por_id:
+            raise ValueError(f"Raiz {raiz_id} no existe en nodos.")
 
         return nodos_por_id[raiz_id]
