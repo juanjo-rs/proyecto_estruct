@@ -6,6 +6,7 @@ import json
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Iterable, Optional
 
 from .arbol_avl import ArbolAVL
@@ -298,6 +299,107 @@ class CatalogoSismico:
         self._registrar_instantanea("Avanzar reloj de simulacion")
         self.reloj = nuevo
 
+    def cargar_por_inserciones(self, datos: dict) -> dict:
+        """Load events from JSON insertion mode with full validation and atomic replacement."""
+        # Validate format
+        if datos.get("version") != 1:
+            raise ValueError("Version de JSON no soportada.")
+        if datos.get("tipo_carga") != "inserciones":
+            raise ValueError("El JSON no es del tipo 'inserciones'.")
+
+        # Validate and parse zones
+        zonas_json = datos.get("zonas", [])
+        zonas = []
+        for zona_json in zonas_json:
+            zona = Zona(
+                nombre=zona_json["nombre"],
+                x_min=Decimal(str(zona_json["x_min"])),
+                x_max=Decimal(str(zona_json["x_max"])),
+                y_min=Decimal(str(zona_json["y_min"])),
+                y_max=Decimal(str(zona_json["y_max"])),
+                poblada=zona_json["poblada"],
+            )
+            zonas.append(zona)
+
+        # Validate and parse clock
+        reloj_nuevo = fecha_utc(datos["reloj"])
+
+        # Validate mode
+        modo = datos.get("modo", "normal")
+        if modo not in ("normal", "estres"):
+            raise ValueError("El modo debe ser 'normal' o 'estres'.")
+
+        # Validate events are unique in the load
+        eventos_json = datos.get("eventos", [])
+        ids_en_carga = set()
+        for evento_json in eventos_json:
+            eid = evento_json["identificador"]
+            if eid in ids_en_carga:
+                raise ValueError(f"ID duplicado en la carga: {eid}")
+            ids_en_carga.add(eid)
+
+        # Validate IDs don't conflict with existing scenario
+        for eid in ids_en_carga:
+            if eid in self.indice_activos:
+                raise ValueError(f"ID {eid} ya existe como evento activo.")
+            if eid in self.archivados:
+                raise ValueError(f"ID {eid} ya existe en historico.")
+            if eid in self.eliminados:
+                raise ValueError(f"ID {eid} fue eliminado y no puede reutilizarse.")
+
+        # Build temporary scenario
+        avl_temp = ArbolAVL()
+        bst_temp = ArbolBST()
+        indice_temp: dict[int, Evento] = {}
+
+        # Insert events in order
+        for evento_json in eventos_json:
+            evento = Evento(
+                identificador=evento_json["identificador"],
+                magnitud=Decimal(str(evento_json["magnitud"])),
+                profundidad_hipocentro=Decimal(str(evento_json["profundidad_hipocentro"])),
+                x=Decimal(str(evento_json["x"])),
+                y=Decimal(str(evento_json["y"])),
+                ocurrencia=evento_json["ocurrencia"],
+                revision=evento_json["revision"],
+                estaciones=set(evento_json["estaciones"]),
+            )
+
+            # Validate event with new clock and zones
+            evento.validar(reloj_nuevo)
+            evento.en_zona_poblada = clasificar_zona_poblada(evento, zonas)
+            evento.prioridad = calcular_prioridad(evento)
+
+            # Insert into temporary trees
+            avl_temp.insertar(evento, balancear=(modo == "normal"))
+            bst_temp.insertar(evento)
+            indice_temp[evento.identificador] = evento
+
+        # All validations passed - atomically replace scenario
+        self._registrar_instantanea("Carga por inserciones")
+        self.zonas = zonas
+        self.reloj = reloj_nuevo
+        self.avl = avl_temp
+        self.bst = bst_temp
+        self.indice_activos = indice_temp
+        self.modo_estres = (modo == "estres")
+
+        # Return statistics
+        return {
+            "avl": {
+                "raiz_id": self.avl.raiz.evento.identificador if self.avl.raiz else None,
+                "altura": self.avl.altura(),
+                "profundidad_maxima": self.avl.profundidad_maxima(),
+                "cantidad_hojas": self.avl.cantidad_hojas(),
+            },
+            "bst": {
+                "raiz_id": self.bst.raiz.evento.identificador if self.bst.raiz else None,
+                "altura": self.bst.altura(),
+                "profundidad_maxima": self.bst.profundidad_maxima(),
+                "cantidad_hojas": self.bst.cantidad_hojas(),
+            },
+        }
+
     def exportar_escenario_completo(self) -> dict:
         """Export the complete scenario as a JSON-serializable dict according to the contract."""
         def serializar_zona(zona: Zona) -> dict:
@@ -373,3 +475,9 @@ def escribir_json_escenario(datos: dict, ruta: str) -> None:
     """Write the scenario dict to a JSON file with UTF-8 encoding and readable indentation."""
     with open(ruta, "w", encoding="utf-8") as f:
         json.dump(datos, f, indent=2, ensure_ascii=False)
+
+
+def leer_json_archivo(ruta: str) -> dict:
+    """Read a JSON file and return the parsed dict."""
+    with open(ruta, "r", encoding="utf-8") as f:
+        return json.load(f)

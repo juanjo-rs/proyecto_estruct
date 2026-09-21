@@ -2,9 +2,9 @@
 
 from datetime import datetime, timezone
 import tkinter as tk
-from tkinter import ttk
+from tkinter import filedialog, ttk
 
-from src.catalogo import CatalogoSismico
+from src.catalogo import CatalogoSismico, leer_json_archivo
 from src.dominio import Zona
 
 
@@ -45,6 +45,21 @@ class VentanaSismoLab(tk.Tk):
     def desactivar_estres(self) -> None:
         self.catalogo.desactivar_modo_estres()
         self.actualizar_indicadores()
+
+    def seleccionar_y_cargar_json(self) -> None:
+        """GUI function to select a JSON file and load it via the business API."""
+        ruta = filedialog.askopenfilename(
+            title="Seleccionar archivo JSON de carga",
+            filetypes=[("Archivos JSON", "*.json"), ("Todos los archivos", "*.*")],
+        )
+        if ruta:
+            try:
+                datos = leer_json_archivo(ruta)
+                estadisticas = self.catalogo.cargar_por_inserciones(datos)
+                self.actualizar_indicadores()
+                print(f"Carga exitosa. Estadísticas: {estadisticas}")
+            except Exception as e:
+                print(f"Error al cargar JSON: {e}")
 
 
 if __name__ == "__main__":

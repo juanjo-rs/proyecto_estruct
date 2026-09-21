@@ -112,3 +112,27 @@ class ArbolBST:
         while nodo.izquierda is not None:
             nodo = nodo.izquierda
         return nodo
+
+    def cantidad_hojas(self) -> int:
+        def contar(nodo: Optional[NodoArbol]) -> int:
+            if nodo is None:
+                return 0
+            if nodo.izquierda is None and nodo.derecha is None:
+                return 1
+            return contar(nodo.izquierda) + contar(nodo.derecha)
+
+        return contar(self.raiz)
+
+    def profundidad_maxima(self) -> int:
+        """Return the maximum depth from root to any leaf node."""
+        def calcular_profundidad(nodo: Optional[NodoArbol], profundidad_actual: int) -> int:
+            if nodo is None:
+                return profundidad_actual - 1
+            if nodo.izquierda is None and nodo.derecha is None:
+                return profundidad_actual
+            return max(
+                calcular_profundidad(nodo.izquierda, profundidad_actual + 1),
+                calcular_profundidad(nodo.derecha, profundidad_actual + 1),
+            )
+
+        return calcular_profundidad(self.raiz, 0) if self.raiz else -1

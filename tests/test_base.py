@@ -231,4 +231,178 @@ class PruebasBase(TestCase):
         # Verify round-trip: deserialize and check structure
         datos_cargados = json.loads(json_str)
         self.assertEqual(datos_cargados["version"], 1)
-        self.assertEqual(len(datos_cargados["avl"]["nodos"]), 4)     
+        self.assertEqual(len(datos_cargados["avl"]["nodos"]), 4)
+
+    def test_cargar_por_inserciones_orden_ascendente(self) -> None:
+        # Create a valid JSON for insertion mode
+        datos = {
+            "version": 1,
+            "tipo_carga": "inserciones",
+            "reloj": "2026-09-07T14:00:00Z",
+            "modo": "normal",
+            "zonas": [
+                {
+                    "nombre": "Ciudad",
+                    "x_min": 0.0,
+                    "x_max": 500.0,
+                    "y_min": 0.0,
+                    "y_max": 500.0,
+                    "poblada": True,
+                }
+            ],
+            "eventos": [
+                {
+                    "identificador": 100,
+                    "magnitud": 4.0,
+                    "profundidad_hipocentro": 30.0,
+                    "x": 100.0,
+                    "y": 100.0,
+                    "ocurrencia": "2026-09-07T12:00:00Z",
+                    "revision": 1,
+                    "estaciones": ["EST-10"],
+                },
+                {
+                    "identificador": 200,
+                    "magnitud": 5.0,
+                    "profundidad_hipocentro": 40.0,
+                    "x": 200.0,
+                    "y": 200.0,
+                    "ocurrencia": "2026-09-07T13:00:00Z",
+                    "revision": 1,
+                    "estaciones": ["EST-20"],
+                },
+                {
+                    "identificador": 300,
+                    "magnitud": 6.0,
+                    "profundidad_hipocentro": 50.0,
+                    "x": 300.0,
+                    "y": 300.0,
+                    "ocurrencia": "2026-09-07T13:30:00Z",
+                    "revision": 1,
+                    "estaciones": ["EST-30"],
+                },
+            ],
+        }
+
+        # Load and verify statistics
+        estadisticas = self.catalogo.cargar_por_inserciones(datos)
+        self.assertIn("avl", estadisticas)
+        self.assertIn("bst", estadisticas)
+        self.assertEqual(len(self.catalogo.indice_activos), 3)
+        self.assertIn(100, self.catalogo.indice_activos)
+        self.assertIn(200, self.catalogo.indice_activos)
+        self.assertIn(300, self.catalogo.indice_activos)
+
+        # Verify AVL is balanced
+        auditoria = self.catalogo.avl.auditar()
+        self.assertTrue(auditoria.balanceado)
+
+        # Verify keys are in ascending order
+        claves_avl = [e.clave() for e in self.catalogo.avl.inorden()]
+        self.assertEqual(claves_avl, sorted(claves_avl))
+
+    def test_cargar_por_inserciones_id_duplicado_falla_atomicamente(self) -> None:
+        # Create initial event
+        self.catalogo.crear_evento(evento(10))
+
+        # Try to load with duplicate ID in the same load
+        datos = {
+            "version": 1,
+            "tipo_carga": "inserciones",
+            "reloj": "2026-09-07T14:00:00Z",
+            "modo": "normal",
+            "zonas": [],
+            "eventos": [
+                {
+                    "identificador": 100,
+                    "magnitud": 4.0,
+                    "profundidad_hipocentro": 30.0,
+                    "x": 100.0,
+                    "y": 100.0,
+                    "ocurrencia": "2026-09-07T12:00:00Z",
+                    "revision": 1,
+                    "estaciones": ["EST-10"],
+                },
+                {
+                    "identificador": 100,  # Duplicate ID
+                    "magnitud": 5.0,
+                    "profundidad_hipocentro": 40.0,
+                    "x": 200.0,
+                    "y": 200.0,
+                    "ocurrencia": "2026-09-07T13:00:00Z",
+                    "revision": 1,
+                    "estaciones": ["EST-20"],
+                },
+            ],
+        }
+
+        # Should fail without modifying the scenario
+        with self.assertRaises(ValueError) as context:
+            self.catalogo.cargar_por_inserciones(datos)
+        self.assertIn("duplicado", str(context.exception).lower())
+
+        # Verify original scenario is unchanged
+        self.assertEqual(len(self.catalogo.indice_activos), 1)
+        self.assertIn(10, self.catalogo.indice_activos)
+        self.assertNotIn(100, self.catalogo.indice_activos)
+
+    def test_cargar_por_inserciones_id_existente_falla_atomicamente(self) -> None:
+        # Create initial event
+        self.catalogo.crear_evento(evento(10))
+
+        # Try to load with ID that already exists in active events
+        datos = {
+            "version": 1,
+            "tipo_carga": "inserciones",
+            "reloj": "2026-09-07T14:00:00Z",
+            "modo": "normal",
+            "zonas": [],
+            "eventos": [
+                {
+                    "identificador": 10,  # Already exists
+                    "magnitud": 5.0,
+                    "profundidad_hipocentro": 40.0,
+                    "x": 200.0,
+                    "y": 200.0,
+                    "ocurrencia": "2026-09-07T13:00:00Z",
+                    "revision": 1,
+                    "estaciones": ["EST-20"],
+                },
+            ],
+        }
+
+        # Should fail without modifying the scenario
+        with self.assertRaises(ValueError) as context:
+            self.catalogo.cargar_por_inserciones(datos)
+        self.assertIn("ya existe", str(context.exception).lower())
+
+        # Verify original scenario is unchanged
+        self.assertEqual(len(self.catalogo.indice_activos), 1)
+        self.assertIn(10, self.catalogo.indice_activos)
+
+    def test_cargar_por_inserciones_formato_invalido_falla(self) -> None:
+        # Invalid version
+        datos = {
+            "version": 2,
+            "tipo_carga": "inserciones",
+            "reloj": "2026-09-07T14:00:00Z",
+            "modo": "normal",
+            "zonas": [],
+            "eventos": [],
+        }
+
+        with self.assertRaises(ValueError):
+            self.catalogo.cargar_por_inserciones(datos)
+
+        # Invalid tipo_carga
+        datos = {
+            "version": 1,
+            "tipo_carga": "topologia",
+            "reloj": "2026-09-07T14:00:00Z",
+            "modo": "normal",
+            "zonas": [],
+            "eventos": [],
+        }
+
+        with self.assertRaises(ValueError):
+            self.catalogo.cargar_por_inserciones(datos)     
