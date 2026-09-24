@@ -11,6 +11,8 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Iterable, Optional
 
+Clave = tuple[int, object, int]
+
 from .arbol_avl import ArbolAVL
 from .arbol_bst import ArbolBST
 from .cola import Cola
@@ -235,6 +237,8 @@ class CatalogoSismico:
 
     def procesar_siguiente_reporte(self) -> str:
         """Resolve exactly one queued report under the mandatory revision table."""
+        if self.cola_pausada:
+            raise RuntimeError("La cola esta pausada durante la recuperacion.")
         reporte = self.reportes_pendientes.frente()
         candidato = deepcopy(reporte.evento)
         candidato.estaciones = {reporte.estacion}
@@ -289,10 +293,8 @@ class CatalogoSismico:
         return resultado
 
     def recuperar_balance(self) -> int:
-        self._registrar_instantanea("Recuperacion global del AVL")
-        giros = self.avl.recuperar_balance()
-        self.modo_estres = False
-        return giros
+        """Repair via the same path as leaving stress, so the queue stays paused."""
+        return self.recuperar_desde_estres()
 
     def avanzar_reloj(self, nuevo_reloj: datetime | str) -> None:
         nuevo = fecha_utc(nuevo_reloj)

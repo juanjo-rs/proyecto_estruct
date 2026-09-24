@@ -243,11 +243,13 @@ class ArbolAVL:
         self._actualizar_altura(nodo)
         return self._rebalancear(nodo)
 
-    def auditar(self) -> ResultadoAuditoria:
+    def auditar(self, exigir_balanceo: bool = True) -> ResultadoAuditoria:
         """Check global BST order, stored heights, and AVL factors."""
         errores: list[str] = []
+        desbalanceado = False
 
         def revisar(nodo: Optional[NodoArbol], minimo: Optional[Clave], maximo: Optional[Clave]) -> int:
+            nonlocal desbalanceado
             if nodo is None:
                 return -1
             clave = nodo.evento.clave()
@@ -259,14 +261,16 @@ class ArbolAVL:
             if nodo.altura != esperada:
                 errores.append(f"Altura almacenada invalida en SIS-{nodo.evento.identificador:06d}.")
             if abs(izquierda - derecha) > 1:
-                errores.append(f"Desbalance AVL en SIS-{nodo.evento.identificador:06d}.")
+                desbalanceado = True
+                if exigir_balanceo:
+                  errores.append(f"Desbalance AVL en SIS-{nodo.evento.identificador:06d}.")
             return esperada
 
         revisar(self.raiz, None, None)
         return ResultadoAuditoria(
             orden_correcto=not any(error.startswith("Orden") for error in errores),
             alturas_correctas=not any(error.startswith("Altura") for error in errores),
-            balanceado=not any(error.startswith("Desbalance") for error in errores),
+            balanceado=not desbalanceado,
             errores=errores,
         )
 
