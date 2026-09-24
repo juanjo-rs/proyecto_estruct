@@ -11,6 +11,8 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Iterable, Optional
 
+Clave = tuple[int, object, int]
+
 from .arbol_avl import ArbolAVL
 from .arbol_bst import ArbolBST
 from .cola import Cola
