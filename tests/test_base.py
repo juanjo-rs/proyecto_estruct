@@ -140,6 +140,35 @@ class PruebasBase(TestCase):
         self.assertFalse(self.catalogo.modo_estres)
         self.assertTrue(self.catalogo.avl.auditar().balanceado)
 
+    def test_recuperacion_estres_conserva_orden_y_pausa_cola(self) -> None:
+        self.assertTrue(self.catalogo.activar_modo_estres())
+        for identificador in range(1, 16):
+            self.catalogo.crear_evento(evento(identificador))
+
+        en_estres = self.catalogo.avl.auditar(exigir_balanceo=False)
+        self.assertTrue(en_estres.orden_correcto, en_estres.errores)
+        self.assertTrue(en_estres.alturas_correctas, en_estres.errores)
+        self.assertFalse(en_estres.balanceado)
+        self.assertFalse(any(error.startswith("Desbalance") for error in en_estres.errores))
+
+        orden_antes = [item.identificador for item in self.catalogo.avl.inorden()]
+        self.catalogo.encolar_reporte(Reporte(evento(1, estacion="EST-02"), "EST-02"))
+        self.catalogo.cola_pausada = True
+        with self.assertRaisesRegex(RuntimeError, "pausada"):
+            self.catalogo.procesar_siguiente_reporte()
+        self.assertEqual(len(self.catalogo.reportes_pendientes), 1)
+        self.catalogo.cola_pausada = False
+
+        giros = self.catalogo.recuperar_balance()
+        self.assertGreaterEqual(giros, 1)
+        self.assertEqual(
+            [item.identificador for item in self.catalogo.avl.inorden()],
+            orden_antes,
+        )
+        self.assertTrue(self.catalogo.avl.auditar().balanceado)
+        self.assertFalse(self.catalogo.modo_estres)
+        self.assertFalse(self.catalogo.cola_pausada)
+
     def  test_sincronizacion_arboles_avl_y_bst(self) -> None:
         for identificador in (10,20,30):
             self.catalogo.crear_evento(evento(identificador))
