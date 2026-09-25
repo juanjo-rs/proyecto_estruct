@@ -25,6 +25,7 @@ from .dominio import (
     clasificar_zona_poblada,
     fecha_utc,
 )
+from .nodo import NodoArbol
 from .pila import Pila
 
 
@@ -82,6 +83,15 @@ class InstantaneaCatalogo:
         catalogo.cola_pausada = self.cola_pausada
         catalogo.asociaciones = self.asociaciones
         catalogo.metricas = self.metricas
+
+
+@dataclass(frozen=True)
+class RamaArchivable:
+    """Eligible subtree: root id, depth from the AVL root, and frozen member ids."""
+
+    id_raiz: int
+    profundidad: int
+    identificadores: tuple[int, ...]
 
 
 class CatalogoSismico:
@@ -228,6 +238,65 @@ class CatalogoSismico:
         self.eliminados.add(identificador)
         self.metricas["eliminaciones"] += 1
         return retirado
+
+    def _evento_cumple_archivo(self, evento: Evento, umbral_t: float) -> bool:
+        """True when one event is low priority and strictly older than T minutes."""
+        antiguedad = (self.reloj - evento.ocurrencia).total_seconds() / 60.0
+        return evento.prioridad == 1 and antiguedad > umbral_t
+
+    def _recorrer_ramas(
+        self,
+        nodo: Optional[NodoArbol],
+        profundidad: int,
+        umbral_t: float,
+        candidatas: list[RamaArchivable],
+    ) -> list[Evento]:
+        """Walk one subtree: always visit children, then decide if THIS branch is eligible."""
+        if nodo is None:
+            return []
+        miembros = (
+            [nodo.evento]
+            + self._recorrer_ramas(nodo.izquierda, profundidad + 1, umbral_t, candidatas)
+            + self._recorrer_ramas(nodo.derecha, profundidad + 1, umbral_t, candidatas)
+        )
+        if all(self._evento_cumple_archivo(evento, umbral_t) for evento in miembros):
+            candidatas.append(
+                RamaArchivable(
+                    id_raiz=nodo.evento.identificador,
+                    profundidad=profundidad,
+                    identificadores=tuple(evento.identificador for evento in miembros),
+                )
+            )
+        return miembros
+
+    def listar_ramas_archivables(self) -> list[RamaArchivable]:
+        """List eligible subtrees without mutating the catalog. Winner sorts first."""
+        if self.parametros.get("T") is None:
+            raise ValueError("El parametro T no esta definido.")
+        umbral_t = float(self.parametros["T"])
+        candidatas: list[RamaArchivable] = []
+        self._recorrer_ramas(self.avl.raiz, 0, umbral_t, candidatas)
+        candidatas.sort(
+            key=lambda rama: (-len(rama.identificadores), -rama.profundidad, -rama.id_raiz)
+        )
+        return candidatas
+
+    def archivar_rama(self) -> RamaArchivable:
+        """Archive the winning eligible subtree using its frozen ID set."""
+        candidatas = self.listar_ramas_archivables()
+        if not candidatas:
+            raise ValueError("No hay rama elegible para archivar.")
+        ganadora = candidatas[0]
+        ids_fijos = list(ganadora.identificadores)
+        self._registrar_instantanea(f"Archivar rama SIS-{ganadora.id_raiz:06d}")
+        for identificador in ids_fijos:
+            evento = self.indice_activos[identificador]
+            clave = evento.clave()
+            self.bst.eliminar(clave)
+            self.avl.eliminar(clave, balancear=not self.modo_estres)
+            del self.indice_activos[identificador]
+            self.archivados[identificador] = evento
+        return ganadora
 
     def encolar_reporte(self, reporte: Reporte) -> None:
         if not reporte.estacion.strip():
