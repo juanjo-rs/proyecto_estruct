@@ -167,7 +167,77 @@ class PruebasBase(TestCase):
         )
         self.assertTrue(self.catalogo.avl.auditar().balanceado)
         self.assertFalse(self.catalogo.modo_estres)
-        self.assertFalse(self.catalogo.cola_pausada)    
+        self.assertFalse(self.catalogo.cola_pausada)
+
+    def test_listar_ramas_archivables_no_muta_y_elige_subarbol_completo(self) -> None:
+        self.catalogo.parametros["T"] = 60
+        for identificador in (10, 20, 30):
+            self.catalogo.crear_evento(evento(identificador, magnitud=4.0))
+        ids_antes = [item.identificador for item in self.catalogo.avl.inorden()]
+        candidatas = self.catalogo.listar_ramas_archivables()
+        self.assertGreaterEqual(len(candidatas), 1)
+        self.assertEqual(len(candidatas[0].identificadores), 3)
+        self.assertEqual(set(candidatas[0].identificadores), set(ids_antes))
+        self.assertEqual([item.identificador for item in self.catalogo.avl.inorden()], ids_antes)
+        self.assertEqual(self.catalogo.archivados, {})
+
+    def test_listar_ramas_rechaza_subarbol_con_prioridad_alta(self) -> None:
+        self.catalogo.parametros["T"] = 60
+        self.catalogo.crear_evento(evento(10, magnitud=4.0))
+        self.catalogo.crear_evento(evento(20, magnitud=6.5))
+        candidatas = self.catalogo.listar_ramas_archivables()
+        self.assertTrue(all(20 not in rama.identificadores for rama in candidatas))
+
+    def test_archivar_sin_rama_elegible_informa_error(self) -> None:
+        self.catalogo.parametros["T"] = 60
+        self.catalogo.crear_evento(evento(10, magnitud=6.5))
+        with self.assertRaisesRegex(ValueError, "No hay rama elegible"):
+            self.catalogo.archivar_rama()
+        self.assertEqual(list(self.catalogo.indice_activos), [10])
+        self.assertEqual(self.catalogo.archivados, {})
+
+    def test_archivar_rama_completa(self) -> None:
+        self.catalogo.parametros["T"] = 60
+        for identificador in (10, 20, 30):
+            self.catalogo.crear_evento(evento(identificador, magnitud=4.0))
+        ids_antes = [item.identificador for item in self.catalogo.avl.inorden()]
+        rama = self.catalogo.archivar_rama()
+        self.assertEqual(set(rama.identificadores), set(ids_antes))
+        self.assertEqual(list(self.catalogo.avl.inorden()), [])
+        self.assertEqual(list(self.catalogo.bst.inorden()), [])
+        self.assertEqual(self.catalogo.indice_activos, {})
+        self.assertEqual(set(self.catalogo.archivados), set(ids_antes))
+        self.assertEqual(self.catalogo.eliminados, set())
+
+    def test_rama_invalida_por_descendiente(self) -> None:
+        self.catalogo.parametros["T"] = 60
+        self.catalogo.activar_modo_estres()
+        self.catalogo.crear_evento(evento(10, magnitud=4.0))
+        self.catalogo.crear_evento(evento(20, magnitud=4.0))
+        self.catalogo.crear_evento(evento(30, magnitud=6.5))
+        self.catalogo.crear_evento(evento(5, magnitud=4.0))
+        rama = self.catalogo.archivar_rama()
+        self.assertEqual(rama.id_raiz, 5)
+        self.assertEqual(self.catalogo.consultar(5)[0], "archivado")
+        self.assertEqual(self.catalogo.consultar(10)[0], "activo")
+        self.assertEqual(self.catalogo.consultar(30)[0], "activo")
+        self.assertNotIn(5, self.catalogo.eliminados)
+
+    def test_desempate_id_raiz_mayor(self) -> None:
+        self.catalogo.parametros["T"] = 60
+        self.catalogo.crear_evento(evento(10, magnitud=4.0, ocurrencia="2026-09-07T09:00:00Z"))
+        self.catalogo.crear_evento(evento(20, magnitud=4.0, ocurrencia="2026-09-07T11:50:00Z"))
+        self.catalogo.crear_evento(evento(30, magnitud=4.0, ocurrencia="2026-09-07T09:00:00Z"))
+        rama = self.catalogo.archivar_rama()
+        self.assertEqual(rama.id_raiz, 30)
+        self.assertEqual(self.catalogo.consultar(30)[0], "archivado")
+        self.assertEqual(self.catalogo.consultar(10)[0], "activo")
+        self.assertEqual(self.catalogo.consultar(20)[0], "activo")
+        self.assertEqual(
+            [item.identificador for item in self.catalogo.avl.inorden()],
+            [item.identificador for item in self.catalogo.bst.inorden()],
+        )
+    
 
     def  test_sincronizacion_arboles_avl_y_bst(self) -> None:
         for identificador in (10,20,30):
