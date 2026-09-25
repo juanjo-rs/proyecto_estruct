@@ -237,7 +237,23 @@ class PruebasBase(TestCase):
             [item.identificador for item in self.catalogo.avl.inorden()],
             [item.identificador for item in self.catalogo.bst.inorden()],
         )
-    
+        
+    def test_desempate_raiz_mas_profunda(self) -> None:
+        self.catalogo.parametros["T"] = 60
+        self.catalogo.activar_modo_estres()
+        self.catalogo.crear_evento(evento(10, magnitud=4.0))
+        self.catalogo.crear_evento(evento(20, magnitud=4.0))
+        self.catalogo.crear_evento(evento(30, magnitud=6.5))
+        self.catalogo.crear_evento(evento(5, magnitud=4.0))
+        self.catalogo.crear_evento(evento(15, magnitud=4.0))
+        ganadora = self.catalogo.listar_ramas_archivables()[0]
+        self.assertEqual(len(ganadora.identificadores), 1)
+        self.assertEqual(ganadora.id_raiz, 15)
+        self.assertEqual(ganadora.profundidad, 2)
+        self.catalogo.archivar_rama()
+        self.assertEqual(self.catalogo.consultar(15)[0], "archivado")
+        self.assertEqual(self.catalogo.consultar(5)[0], "activo")
+        self.assertEqual(self.catalogo.consultar(10)[0], "activo")   
 
     def  test_sincronizacion_arboles_avl_y_bst(self) -> None:
         for identificador in (10,20,30):
@@ -250,6 +266,63 @@ class PruebasBase(TestCase):
         self.catalogo.eliminar_evento(20)
         self.assertEqual([x.identificador for x in self.catalogo.avl.inorden()],
                         [y.identificador for y in self.catalogo.bst.inorden()])
+
+    def test_casos_balanceo_RR(self) -> None:
+        for identificador in (10,20,30):
+            self.catalogo.crear_evento(evento(identificador))
+        en_orden = self.catalogo.avl.auditar(exigir_balanceo= True)
+        self.assertTrue(en_orden.balanceado)
+        self.assertTrue(en_orden.orden_correcto)     
+        self.assertEqual(self.catalogo.avl.casos_rr,1)
+        self.assertEqual(self.catalogo.avl.casos_lr,0)
+        self.assertEqual(self.catalogo.avl.casos_rl,0)
+        self.assertEqual(self.catalogo.avl.casos_ll,0)
+
+    def test_casos_balanceo_LL(self) -> None:
+        for identificador in (30,20,10):
+            self.catalogo.crear_evento(evento(identificador))
+        en_orden = self.catalogo.avl.auditar(exigir_balanceo= True)    
+        self.assertTrue(en_orden.orden_correcto)    
+        self.assertTrue(en_orden.balanceado) 
+        self.assertEqual(self.catalogo.avl.casos_rr,0)
+        self.assertEqual(self.catalogo.avl.casos_lr,0)
+        self.assertEqual(self.catalogo.avl.casos_rl,0)
+        self.assertEqual(self.catalogo.avl.casos_ll,1)
+
+    def test_casos_balanceo_RL(self) -> None:
+        for identificador in (20,30,25):
+            self.catalogo.crear_evento(evento(identificador))
+        en_orden = self.catalogo.avl.auditar(exigir_balanceo= True)    
+        self.assertTrue(en_orden.orden_correcto)
+        self.assertTrue(en_orden.balanceado)
+        self.assertEqual(self.catalogo.avl.casos_rr,0)
+        self.assertEqual(self.catalogo.avl.casos_lr,0)
+        self.assertEqual(self.catalogo.avl.casos_rl,1)
+        self.assertEqual(self.catalogo.avl.casos_ll,0)
+
+    def test_casos_balanceo_LR(self) -> None:
+        for identificador in (30,20,25):
+            self.catalogo.crear_evento(evento(identificador))
+        en_orden = self.catalogo.avl.auditar(exigir_balanceo= True)    
+        self.assertTrue(en_orden.orden_correcto)     
+        self.assertTrue(en_orden.balanceado)
+        self.assertEqual(self.catalogo.avl.casos_rr,0)
+        self.assertEqual(self.catalogo.avl.casos_lr,1)
+        self.assertEqual(self.catalogo.avl.casos_rl,0)
+        self.assertEqual(self.catalogo.avl.casos_ll,0)
+
+    def test_factor_nodo_desbalance(self) -> None:
+        self.catalogo.activar_modo_estres()
+        for identificador in(1,2,3,4,5,6,7,8,9,10,11,12):
+            self.catalogo.crear_evento(evento(identificador))
+        en_orden = self.catalogo.avl.auditar(exigir_balanceo= False)
+        self.assertTrue(en_orden.orden_correcto)
+        self.assertFalse(en_orden.balanceado)
+        self.assertTrue(abs(self.catalogo.avl._factor(self.catalogo.avl.raiz))>2)
+        self.catalogo.avl.recuperar_balance()
+        arbol = self.catalogo.avl.auditar(exigir_balanceo=True)
+        self.assertTrue(arbol.orden_correcto)
+        self.assertTrue(arbol.balanceado)
 
     def test_exportar_escenario_completo_contiene_todos_los_elementos(self) -> None:
         # Create a non-trivial topology with different priorities
