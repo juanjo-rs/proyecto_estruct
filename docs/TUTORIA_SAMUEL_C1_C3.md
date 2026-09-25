@@ -50,7 +50,7 @@ crear las consultas de la seccion 11.
 3. El reloj es explicito. Un evento no puede ocurrir despues de ese reloj y el
    usuario solo puede avanzarlo, no retrocederlo.
 4. Los parametros iniciales son `W = 48 horas`, `R = 40 km`, `L = 3` y
-   `T = 72 horas`. W, R y T son positivos; L es entero no negativo.
+   `T = 4320 minutos (72 horas)`. W, R y T son positivos; L es entero no negativo.
 5. Cambiar un parametro o avanzar el reloj es una accion independiente que se
    puede deshacer. Deshacer debe restaurar parametros, reloj, metricas y todo el
    escenario anterior.
