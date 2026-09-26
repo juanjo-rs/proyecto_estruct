@@ -225,6 +225,17 @@ class ArbolAVL:
 
         yield from recorrer(self.raiz)
 
+    def nodos_con_profundidad(self) -> Generator[tuple[NodoArbol, int], None, None]:
+        """Yield each node with its depth. The root is depth 0."""
+        def recorrer(nodo: Optional[NodoArbol], profundidad: int) -> Generator[tuple[NodoArbol, int], None, None]:
+            if nodo is not None:
+                yield nodo, profundidad
+                yield from recorrer(nodo.izquierda, profundidad + 1)
+                yield from recorrer(nodo.derecha, profundidad + 1)
+
+        yield from recorrer(self.raiz, 0)
+
+
     def recuperar_balance(self) -> int:
         """Repair a stress-mode tree with rotations, never by rebuilding from a list."""
         giros_iniciales = self.giros_izquierda + self.giros_derecha
