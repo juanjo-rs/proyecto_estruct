@@ -38,9 +38,16 @@ class VentanaSismoLab(tk.Tk):
 
     def actualizar_indicadores(self) -> None:
         modo = "estres" if self.catalogo.modo_estres else "normal"
+        datos = self.catalogo.indicadores()
+        avl = datos["avl"]
         self.estado.config(
-            text=f"Eventos activos: {len(self.catalogo.indice_activos)} | "
-            f"Cola: {len(self.catalogo.reportes_pendientes)} | Modo {modo}"
+            text=(
+                f"Eventos activos: {len(self.catalogo.indice_activos)} | "
+                f"Cola: {len(self.catalogo.reportes_pendientes)} | Modo {modo} | "
+                f"AVL h={avl['altura']} hojas={avl['hojas']} "
+                f"giros={avl['giros_izquierda'] + avl['giros_derecha']} | "
+                f"Acceso costoso: {len(datos['acceso_costoso'])}"
+            )
         )
 
     def activar_estres(self) -> None:

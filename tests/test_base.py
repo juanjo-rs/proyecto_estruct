@@ -278,6 +278,30 @@ class PruebasBase(TestCase):
         self.assertEqual([x.identificador for x in self.catalogo.avl.inorden()],
                         [y.identificador for y in self.catalogo.bst.inorden()])
 
+    def test_indicadores_de_giro_se_restauran_al_deshacer(self) -> None:
+        for identificador in (10, 20, 30):
+            self.catalogo.crear_evento(evento(identificador))
+        antes = self.catalogo.indicadores()
+        self.assertEqual(antes["avl"]["casos_rr"], 1)
+        self.assertEqual(antes["avl"]["hojas"], 2)
+        self.assertGreater(antes["bst"]["altura"], antes["avl"]["altura"])
+        self.catalogo.deshacer()
+        despues = self.catalogo.indicadores()
+        self.assertEqual(despues["avl"]["casos_rr"], 0)
+        self.assertEqual(despues["avl"]["hojas"], 1)
+        self.assertEqual(self.catalogo.consultar(30)[0], "desconocido")
+
+    def test_acceso_costoso_si_profundidad_supera_L(self) -> None:
+        self.catalogo.parametros["L"] = 0
+        for identificador in (10, 20, 30):
+            self.catalogo.crear_evento(evento(identificador))
+        costosos = self.catalogo.indicadores()["acceso_costoso"]
+        self.assertEqual(sorted(item["identificador"] for item in costosos), [10, 30])
+        self.assertTrue(all(item["profundidad"] > 0 for item in costosos))
+        self.assertTrue(all(item["examinados"] >= 1 for item in costosos))
+        self.catalogo.parametros["L"] = 1
+        self.assertEqual(self.catalogo.indicadores()["acceso_costoso"], [])
+
     def test_casos_balanceo_RR(self) -> None:
         for identificador in (10,20,30):
             self.catalogo.crear_evento(evento(identificador))

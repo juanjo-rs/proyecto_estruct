@@ -153,6 +153,43 @@ class CatalogoSismico:
         instantanea.restaurar(self)
         return f"Deshecho: {instantanea.descripcion}"
 
+    def indicadores(self) -> dict[str, object]:
+        """Read structural counters from the live trees without mutating them."""
+        limite = self.parametros.get("L")
+        limite_valido = isinstance(limite, int) and not isinstance(limite, bool) and limite >= 0
+        costosos: list[dict[str, int]] = []
+        if limite_valido:
+            for nodo, profundidad in self.avl.nodos_con_profundidad():
+                if nodo.evento.prioridad == 3 and profundidad > limite:
+                    _, examinados = self.avl.buscar_clave(nodo.evento.clave())
+                    costosos.append(
+                        {
+                            "identificador": nodo.evento.identificador,
+                            "profundidad": profundidad,
+                            "examinados": examinados,
+                        }
+                    )
+        return {
+            "avl": {
+                "giros_izquierda": self.avl.giros_izquierda,
+                "giros_derecha": self.avl.giros_derecha,
+                "casos_ll": self.avl.casos_ll,
+                "casos_rr": self.avl.casos_rr,
+                "casos_lr": self.avl.casos_lr,
+                "casos_rl": self.avl.casos_rl,
+                "altura": self.avl.altura(),
+                "hojas": self.avl.cantidad_hojas(),
+                "profundidad_maxima": self.avl.profundidad_maxima(),
+            },
+            "bst": {
+                "altura": self.bst.altura(),
+                "hojas": self.bst.cantidad_hojas(),
+                "profundidad_maxima": self.bst.profundidad_maxima(),
+            },
+            "L": limite if limite_valido else None,
+            "acceso_costoso": costosos,
+        }
+
     def crear_evento(self, evento: Evento, registrar_accion: bool = True) -> Evento:
         """Create one active event after all validation succeeds."""
         if evento.identificador in self.indice_activos or evento.identificador in self.archivados:
