@@ -33,6 +33,7 @@ class VentanaSismoLab(tk.Tk):
         ttk.Button(self, text="Activar modo estres", command=self.activar_estres).pack(pady=4)
         ttk.Button(self, text="Desactivar (recuperar)", command=self.desactivar_estres).pack(pady=4)
         ttk.Button(self, text="Gestionar cola de reportes", command=self.abrir_ventana_cola).pack(pady=4)
+        ttk.Button(self, text="Visualizar arboles", command=self.abrir_ventana_visualizacion).pack(pady=4)
         ttk.Button(self, text="Guardar version", command=self.guardar_version).pack(pady=4)
         ttk.Button(self, text="Restaurar version", command=self.restaurar_version).pack(pady=4)
 
@@ -312,6 +313,248 @@ class VentanaSismoLab(tk.Tk):
                 reporte.evento.identificador,
                 reporte.evento.revision,
             ))
+
+    def abrir_ventana_visualizacion(self) -> None:
+        """Open the tree visualization window with AVL and BST side by side."""
+        ventana_vis = tk.Toplevel(self)
+        ventana_vis.title("Visualizacion de Arboles AVL y BST")
+        ventana_vis.geometry("1200x700")
+
+        # Control variables
+        self._coordenadas_nodos_avl = {}  # id -> (x, y)
+        self._coordenadas_nodos_bst = {}  # id -> (x, y)
+        self._radio_nodo = 25
+
+        # Frame for AVL
+        frame_avl = ttk.LabelFrame(ventana_vis, text="AVL (Balanceado)")
+        frame_avl.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+        canvas_avl = tk.Canvas(frame_avl, bg="white")
+        canvas_avl.pack(fill=tk.BOTH, expand=True)
+
+        # Frame for BST
+        frame_bst = ttk.LabelFrame(ventana_vis, text="BST (No Balanceado)")
+        frame_bst.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+        canvas_bst = tk.Canvas(frame_bst, bg="white")
+        canvas_bst.pack(fill=tk.BOTH, expand=True)
+
+        # Frame for controls and info
+        frame_control = ttk.Frame(ventana_vis)
+        frame_control.pack(side=tk.BOTTOM, fill=tk.X, padx=5, pady=5)
+
+        ttk.Button(frame_control, text="Redibujar", command=lambda: self._redibujar_arboles(canvas_avl, canvas_bst)).pack(side=tk.LEFT, padx=5)
+
+        # Info panel for node inspection
+        frame_info = ttk.LabelFrame(frame_control, text="Informacion del Nodo")
+        frame_info.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5)
+
+        info_label = ttk.Label(frame_info, text="Click en un nodo para inspeccionar", wraplength=400)
+        info_label.pack(padx=5, pady=5)
+
+        # Bind click events
+        canvas_avl.bind("<Button-1>", lambda e: self._inspeccionar_nodo(e, canvas_avl, "avl", info_label))
+        canvas_bst.bind("<Button-1>", lambda e: self._inspeccionar_nodo(e, canvas_bst, "bst", info_label))
+
+        # Initial draw
+        self._redibujar_arboles(canvas_avl, canvas_bst)
+
+    def _redibujar_arboles(self, canvas_avl: tk.Canvas, canvas_bst: tk.Canvas) -> None:
+        """Redraw both trees from the catalog."""
+        # Clear canvases
+        canvas_avl.delete("all")
+        canvas_bst.delete("all")
+        self._coordenadas_nodos_avl.clear()
+        self._coordenadas_nodos_bst.clear()
+
+        # Draw AVL
+        vista_avl, raiz_avl = self.catalogo.obtener_vista_arbol("avl")
+        if raiz_avl is None:
+            canvas_avl.create_text(
+                canvas_avl.winfo_width() / 2,
+                canvas_avl.winfo_height() / 2,
+                text="Arbol AVL vacio",
+                font=("Segoe UI", 14),
+                fill="gray"
+            )
+        else:
+            self._dibujar_arbol(canvas_avl, vista_avl, raiz_avl, "blue")
+
+        # Draw BST
+        vista_bst, raiz_bst = self.catalogo.obtener_vista_arbol("bst")
+        if raiz_bst is None:
+            canvas_bst.create_text(
+                canvas_bst.winfo_width() / 2,
+                canvas_bst.winfo_height() / 2,
+                text="Arbol BST vacio",
+                font=("Segoe UI", 14),
+                fill="gray"
+            )
+        else:
+            self._dibujar_arbol(canvas_bst, vista_bst, raiz_bst, "green")
+
+    def _dibujar_arbol(
+        self,
+        canvas: tk.Canvas,
+        vista: dict[int, "VistaNodo"],
+        raiz_id: int,
+        color: str,
+    ) -> None:
+        """
+        Draw a tree on the canvas using the view data.
+
+        Strategy:
+        - Root at top center
+        - Horizontal width halves at each level
+        - Vertical spacing fixed (60px per level)
+        - Left child X = parent X - width/2
+        - Right child X = parent X + width/2
+        - Child Y = parent Y + level_height
+        """
+        canvas_width = canvas.winfo_width()
+        canvas_height = canvas.winfo_height()
+        if canvas_width < 100:
+            canvas_width = 500  # Default if not yet rendered
+        if canvas_height < 100:
+            canvas_height = 500
+
+        # Calculate tree height to adjust spacing
+        alturas = {nodo_id: nodo.altura for nodo_id, nodo in vista.items()}
+        max_altura = max(alturas.values()) if alturas else 0
+        nivel_height = min(60, canvas_height / (max_altura + 2))  # Adjust for tall trees
+
+        # Calculate coordinates recursively
+        def calcular_coordenadas(
+            nodo_id: int,
+            x: float,
+            y: float,
+            ancho_disponible: float,
+            profundidad: int,
+        ) -> None:
+            nodo = vista[nodo_id]
+            coordenadas = (x, y)
+
+            # Store coordinates for click detection
+            if color == "blue":
+                self._coordenadas_nodos_avl[nodo_id] = coordenadas
+            else:
+                self._coordenadas_nodos_bst[nodo_id] = coordenadas
+
+            # Calculate child positions
+            ancho_hijo = ancho_disponible / 2
+            y_hijo = y + nivel_height
+
+            if nodo.izquierdo_id is not None:
+                x_izquierdo = x - ancho_hijo / 2
+                calcular_coordenadas(nodo.izquierdo_id, x_izquierdo, y_hijo, ancho_hijo, profundidad + 1)
+
+            if nodo.derecho_id is not None:
+                x_derecho = x + ancho_hijo / 2
+                calcular_coordenadas(nodo.derecho_id, x_derecho, y_hijo, ancho_hijo, profundidad + 1)
+
+        # Start from root
+        x_raiz = canvas_width / 2
+        y_raiz = 50
+        ancho_inicial = canvas_width * 0.8  # Use 80% of canvas width
+        calcular_coordenadas(raiz_id, x_raiz, y_raiz, ancho_inicial, 0)
+
+        # Draw edges first (so they appear behind nodes)
+        def dibujar_enlaces(nodo_id: int) -> None:
+            nodo = vista[nodo_id]
+            x_padre, y_padre = (
+                self._coordenadas_nodos_avl[nodo_id] if color == "blue"
+                else self._coordenadas_nodos_bst[nodo_id]
+            )
+
+            if nodo.izquierdo_id is not None:
+                x_hijo, y_hijo = (
+                    self._coordenadas_nodos_avl[nodo.izquierdo_id] if color == "blue"
+                    else self._coordenadas_nodos_bst[nodo.izquierdo_id]
+                )
+                canvas.create_line(x_padre, y_padre, x_hijo, y_hijo, fill="black", width=2)
+                dibujar_enlaces(nodo.izquierdo_id)
+
+            if nodo.derecho_id is not None:
+                x_hijo, y_hijo = (
+                    self._coordenadas_nodos_avl[nodo.derecho_id] if color == "blue"
+                    else self._coordenadas_nodos_bst[nodo.derecho_id]
+                )
+                canvas.create_line(x_padre, y_padre, x_hijo, y_hijo, fill="black", width=2)
+                dibujar_enlaces(nodo.derecho_id)
+
+        dibujar_enlaces(raiz_id)
+
+        # Draw nodes
+        for nodo_id, nodo in vista.items():
+            x, y = (
+                self._coordenadas_nodos_avl[nodo_id] if color == "blue"
+                else self._coordenadas_nodos_bst[nodo_id]
+            )
+
+            # Draw circle
+            radio = self._radio_nodo
+            canvas.create_oval(
+                x - radio, y - radio,
+                x + radio, y + radio,
+                fill=color,
+                outline="black",
+                width=2
+            )
+
+            # Draw key (P, M, I)
+            clave_texto = f"({nodo.clave[0]}, {nodo.clave[1]}, {nodo.clave[2]})"
+            canvas.create_text(
+                x, y,
+                text=clave_texto,
+                font=("Segoe UI", 8),
+                fill="white"
+            )
+
+            # Draw height and factor for AVL
+            if nodo.factor is not None:
+                info_texto = f"h:{nodo.altura} f:{nodo.factor}"
+                canvas.create_text(
+                    x, y + radio + 10,
+                    text=info_texto,
+                    font=("Segoe UI", 7),
+                    fill="black"
+                )
+
+    def _inspeccionar_nodo(
+        self,
+        evento: tk.Event,
+        canvas: tk.Canvas,
+        tipo: str,
+        info_label: ttk.Label,
+    ) -> None:
+        """Inspect a node when clicked."""
+        x_click, y_click = evento.x, evento.y
+
+        coordenadas = (
+            self._coordenadas_nodos_avl if tipo == "avl"
+            else self._coordenadas_nodos_bst
+        )
+
+        # Find clicked node
+        for nodo_id, (x, y) in coordenadas.items():
+            distancia = ((x_click - x) ** 2 + (y_click - y) ** 2) ** 0.5
+            if distancia <= self._radio_nodo:
+                # Get event data from catalog
+                if nodo_id in self.catalogo.indice_activos:
+                    evento_data = self.catalogo.indice_activos[nodo_id]
+                    info_texto = (
+                        f"ID: {evento_data.identificador} | "
+                        f"Prioridad: {evento_data.prioridad} | "
+                        f"Magnitud: {evento_data.magnitud} | "
+                        f"Estaciones: {', '.join(sorted(evento_data.estaciones))} | "
+                        f"Estado: {evento_data.estado}"
+                    )
+                else:
+                    info_texto = f"ID: {nodo_id} (No encontrado en indice activos)"
+                info_label.config(text=info_texto)
+                return
+
+        info_label.config(text="Click en un nodo para inspeccionar")
 
 
 if __name__ == "__main__":

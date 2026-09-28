@@ -20,6 +20,7 @@ from .dominio import (
     EstadoAtencion,
     Evento,
     Reporte,
+    VistaNodo,
     Zona,
     calcular_prioridad,
     clasificar_zona_poblada,
@@ -410,6 +411,53 @@ class CatalogoSismico:
             raise ValueError("El reloj de simulacion no puede retroceder.")
         self._registrar_instantanea("Avanzar reloj de simulacion")
         self.reloj = nuevo
+
+    def obtener_vista_arbol(self, tipo: str) -> tuple[dict[int, VistaNodo], Optional[int]]:
+        """
+        Get an immutable view of the AVL or BST tree for GUI rendering.
+
+        Args:
+            tipo: "avl" or "bst"
+
+        Returns:
+            (dict of id -> VistaNodo, root_id or None)
+
+        Raises:
+            ValueError: If tipo is not "avl" or "bst"
+        """
+        if tipo not in ("avl", "bst"):
+            raise ValueError("Tipo debe ser 'avl' o 'bst'.")
+
+        arbol = self.avl if tipo == "avl" else self.bst
+        vista: dict[int, VistaNodo] = {}
+
+        def recorrer(nodo: Optional[NodoArbol]) -> Optional[int]:
+            if nodo is None:
+                return None
+
+            nodo_id = nodo.evento.identificador
+            izquierdo_id = recorrer(nodo.izquierda)
+            derecho_id = recorrer(nodo.derecha)
+
+            # Calculate balance factor for AVL, None for BST
+            factor = None
+            if tipo == "avl":
+                from .arbol_avl import ArbolAVL
+                factor = ArbolAVL._factor(nodo)
+
+            vista[nodo_id] = VistaNodo(
+                id=nodo_id,
+                clave=nodo.evento.clave(),
+                izquierdo_id=izquierdo_id,
+                derecho_id=derecho_id,
+                altura=nodo.altura,
+                factor=factor,
+            )
+
+            return nodo_id
+
+        raiz_id = recorrer(arbol.raiz)
+        return vista, raiz_id
 
     def cargar_por_inserciones(self, datos: dict) -> dict:
         """Load events from JSON insertion mode with full validation and atomic replacement."""

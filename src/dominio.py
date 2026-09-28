@@ -111,6 +111,18 @@ class Reporte:
     estacion: str
 
 
+@dataclass(frozen=True)
+class VistaNodo:
+    """Immutable view of a tree node for GUI rendering."""
+
+    id: int
+    clave: tuple[int, Decimal, int]  # (prioridad, magnitud, identificador)
+    izquierdo_id: Optional[int]
+    derecho_id: Optional[int]
+    altura: int
+    factor: Optional[int]  # None for BST, int for AVL
+
+
 def clasificar_zona_poblada(evento: Evento, zonas: Iterable[Zona]) -> bool:
     """A border shared with a populated zone is classified as populated."""
     return any(zona.poblada and zona.contiene(evento.x, evento.y) for zona in zonas)
