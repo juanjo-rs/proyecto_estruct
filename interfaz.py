@@ -34,6 +34,7 @@ class VentanaSismoLab(tk.Tk):
         ttk.Button(self, text="Desactivar (recuperar)", command=self.desactivar_estres).pack(pady=4)
         ttk.Button(self, text="Gestionar cola de reportes", command=self.abrir_ventana_cola).pack(pady=4)
         ttk.Button(self, text="Visualizar arboles", command=self.abrir_ventana_visualizacion).pack(pady=4)
+        ttk.Button(self, text="Visualizar mapa", command=self.abrir_ventana_mapa).pack(pady=4)
         ttk.Button(self, text="Guardar version", command=self.guardar_version).pack(pady=4)
         ttk.Button(self, text="Restaurar version", command=self.restaurar_version).pack(pady=4)
 
@@ -555,6 +556,184 @@ class VentanaSismoLab(tk.Tk):
                 return
 
         info_label.config(text="Click en un nodo para inspeccionar")
+
+    def abrir_ventana_mapa(self) -> None:
+        """Open the map visualization window with zones and events."""
+        ventana_mapa = tk.Toplevel(self)
+        ventana_mapa.title("Mapa de Eventos Sismicos")
+        ventana_mapa.geometry("900x700")
+
+        # Control variables
+        self._coordenadas_eventos = {}  # id -> (x, y)
+        self._radio_evento = 10
+        self._escala = 0.6  # Canvas pixels per km
+
+        # Frame for map canvas
+        frame_mapa = ttk.Frame(ventana_mapa)
+        frame_mapa.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+        canvas_mapa = tk.Canvas(frame_mapa, bg="white", width=600, height=600)
+        canvas_mapa.pack(fill=tk.BOTH, expand=True)
+
+        # Frame for legend and info
+        frame_lateral = ttk.Frame(ventana_mapa)
+        frame_lateral.pack(side=tk.RIGHT, fill=tk.Y, padx=5, pady=5)
+
+        # Legend
+        frame_leyenda = ttk.LabelFrame(frame_lateral, text="Leyenda")
+        frame_leyenda.pack(fill=tk.X, pady=5)
+
+        # Priority colors
+        ttk.Label(frame_leyenda, text="Prioridad:").pack(anchor=tk.W, padx=5)
+        
+        canvas_p1 = tk.Canvas(frame_leyenda, width=20, height=20, bg="white")
+        canvas_p1.pack(padx=5, pady=2)
+        canvas_p1.create_oval(5, 5, 15, 15, fill="green", outline="black")
+        ttk.Label(frame_leyenda, text="1 (Baja)").pack(anchor=tk.W, padx=5)
+        
+        canvas_p2 = tk.Canvas(frame_leyenda, width=20, height=20, bg="white")
+        canvas_p2.pack(padx=5, pady=2)
+        canvas_p2.create_oval(5, 5, 15, 15, fill="yellow", outline="black")
+        ttk.Label(frame_leyenda, text="2 (Media)").pack(anchor=tk.W, padx=5)
+        
+        canvas_p3 = tk.Canvas(frame_leyenda, width=20, height=20, bg="white")
+        canvas_p3.pack(padx=5, pady=2)
+        canvas_p3.create_oval(5, 5, 15, 15, fill="red", outline="black")
+        ttk.Label(frame_leyenda, text="3 (Alta)").pack(anchor=tk.W, padx=5)
+
+        # Expensive access symbol
+        ttk.Separator(frame_leyenda, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=5)
+        ttk.Label(frame_leyenda, text="Acceso Costoso:").pack(anchor=tk.W, padx=5)
+        
+        canvas_costoso = tk.Canvas(frame_leyenda, width=20, height=20, bg="white")
+        canvas_costoso.pack(padx=5, pady=2)
+        canvas_costoso.create_rectangle(3, 3, 17, 17, outline="red", width=3)
+        ttk.Label(frame_leyenda, text="Borde rojo grueso").pack(anchor=tk.W, padx=5)
+
+        # Zone types
+        ttk.Separator(frame_leyenda, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=5)
+        ttk.Label(frame_leyenda, text="Zonas:").pack(anchor=tk.W, padx=5)
+        
+        canvas_zp = tk.Canvas(frame_leyenda, width=20, height=20, bg="white")
+        canvas_zp.pack(padx=5, pady=2)
+        canvas_zp.create_rectangle(3, 3, 17, 17, fill="#FFFFCC", outline="black")
+        ttk.Label(frame_leyenda, text="Poblada").pack(anchor=tk.W, padx=5)
+        
+        canvas_zn = tk.Canvas(frame_leyenda, width=20, height=20, bg="white")
+        canvas_zn.pack(padx=5, pady=2)
+        canvas_zn.create_rectangle(3, 3, 17, 17, fill="#E0E0E0", outline="gray")
+        ttk.Label(frame_leyenda, text="No poblada").pack(anchor=tk.W, padx=5)
+
+        # Info panel for event inspection
+        frame_info = ttk.LabelFrame(frame_lateral, text="Informacion del Evento")
+        frame_info.pack(fill=tk.BOTH, expand=True, pady=5)
+
+        info_label = ttk.Label(frame_info, text="Click en un evento para inspeccionar", wraplength=250)
+        info_label.pack(padx=5, pady=5)
+
+        # Redraw button
+        ttk.Button(frame_lateral, text="Redibujar", command=lambda: self._redibujar_mapa(canvas_mapa, info_label)).pack(pady=5)
+
+        # Bind click event
+        canvas_mapa.bind("<Button-1>", lambda e: self._inspeccionar_evento_mapa(e, info_label))
+
+        # Initial draw
+        self._redibujar_mapa(canvas_mapa, info_label)
+
+    def _redibujar_mapa(self, canvas: tk.Canvas, info_label: ttk.Label) -> None:
+        """Redraw the map from the catalog."""
+        canvas.delete("all")
+        self._coordenadas_eventos.clear()
+
+        # Get map view
+        vista_zonas, vista_eventos = self.catalogo.obtener_vista_mapa()
+
+        # Draw zones
+        for zona in vista_zonas:
+            self._dibujar_zona(canvas, zona)
+
+        # Draw events
+        for evento in vista_eventos:
+            self._dibujar_evento_mapa(canvas, evento)
+
+        # Draw axes labels
+        canvas.create_text(10, 10, text="(0,0)", anchor=tk.NW, font=("Segoe UI", 8))
+        canvas.create_text(590, 590, text="(1000,1000)", anchor=tk.SE, font=("Segoe UI", 8))
+
+    def _dibujar_zona(self, canvas: tk.Canvas, zona: "VistaZona") -> None:
+        """Draw a zone rectangle on the canvas."""
+        # Convert world coordinates to canvas coordinates
+        x1 = float(zona.x_min) * self._escala
+        y1 = 600 - float(zona.y_max) * self._escala  # Invert Y
+        x2 = float(zona.x_max) * self._escala
+        y2 = 600 - float(zona.y_min) * self._escala  # Invert Y
+
+        # Choose color based on populated status
+        fill_color = "#FFFFCC" if zona.poblada else "#E0E0E0"  # Light yellow or light gray
+        outline_color = "black" if zona.poblada else "gray"
+
+        # Draw rectangle
+        canvas.create_rectangle(x1, y1, x2, y2, fill=fill_color, outline=outline_color, width=2)
+
+        # Draw zone name in center
+        cx = (x1 + x2) / 2
+        cy = (y1 + y2) / 2
+        canvas.create_text(cx, cy, text=zona.nombre, font=("Segoe UI", 9, "bold"))
+
+    def _dibujar_evento_mapa(self, canvas: tk.Canvas, evento: "VistaEventoMapa") -> None:
+        """Draw an event circle on the canvas."""
+        # Convert world coordinates to canvas coordinates
+        x = float(evento.x) * self._escala
+        y = 600 - float(evento.y) * self._escala  # Invert Y
+
+        # Store coordinates for click detection
+        self._coordenadas_eventos[evento.id] = (x, y)
+
+        # Choose color based on priority
+        if evento.prioridad == 1:
+            fill_color = "green"
+        elif evento.prioridad == 2:
+            fill_color = "yellow"
+        else:  # priority 3
+            fill_color = "red"
+
+        # Draw circle
+        radio = self._radio_evento
+        canvas.create_oval(x - radio, y - radio, x + radio, y + radio, fill=fill_color, outline="black", width=2)
+
+        # Draw expensive access indicator (red thick border or square)
+        if evento.acceso_costoso:
+            canvas.create_rectangle(x - radio - 3, y - radio - 3, x + radio + 3, y + radio + 3, outline="red", width=3)
+
+        # Draw event ID above circle
+        canvas.create_text(x, y - radio - 8, text=str(evento.id), font=("Segoe UI", 8, "bold"))
+
+    def _inspeccionar_evento_mapa(self, evento: tk.Event, info_label: ttk.Label) -> None:
+        """Inspect an event when clicked."""
+        x_click, y_click = evento.x, evento.y
+
+        # Find clicked event
+        for evento_id, (x, y) in self._coordenadas_eventos.items():
+            distancia = ((x_click - x) ** 2 + (y_click - y) ** 2) ** 0.5
+            if distancia <= self._radio_evento + 5:  # +5 for easier clicking
+                # Get event data from catalog
+                if evento_id in self.catalogo.indice_activos:
+                    evento_data = self.catalogo.indice_activos[evento_id]
+                    info_texto = (
+                        f"ID: {evento_data.identificador}\n"
+                        f"Prioridad: {evento_data.prioridad}\n"
+                        f"Magnitud: {evento_data.magnitud}\n"
+                        f"Coordenadas: ({evento_data.x}, {evento_data.y})\n"
+                        f"Estaciones: {', '.join(sorted(evento_data.estaciones))}\n"
+                        f"Estado: {evento_data.estado}\n"
+                        f"Zona poblada: {'Si' if evento_data.en_zona_poblada else 'No'}"
+                    )
+                else:
+                    info_texto = f"ID: {evento_id} (No encontrado en indice activos)"
+                info_label.config(text=info_texto)
+                return
+
+        info_label.config(text="Click en un evento para inspeccionar")
 
 
 if __name__ == "__main__":

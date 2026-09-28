@@ -20,7 +20,9 @@ from .dominio import (
     EstadoAtencion,
     Evento,
     Reporte,
+    VistaEventoMapa,
     VistaNodo,
+    VistaZona,
     Zona,
     calcular_prioridad,
     clasificar_zona_poblada,
@@ -458,6 +460,47 @@ class CatalogoSismico:
 
         raiz_id = recorrer(arbol.raiz)
         return vista, raiz_id
+
+    def obtener_vista_mapa(self) -> tuple[list[VistaZona], list[VistaEventoMapa]]:
+        """
+        Get an immutable view of zones and active events for map rendering.
+
+        Returns:
+            (list of VistaZona, list of VistaEventoMapa)
+        """
+        # Create zone views
+        vista_zonas = [
+            VistaZona(
+                nombre=zona.nombre,
+                x_min=zona.x_min,
+                x_max=zona.x_max,
+                y_min=zona.y_min,
+                y_max=zona.y_max,
+                poblada=zona.poblada,
+            )
+            for zona in self.zonas
+        ]
+
+        # Get expensive access IDs from indicators
+        indicadores = self.indicadores()
+        costosos_ids = {item["identificador"] for item in indicadores["acceso_costoso"]}
+
+        # Create event views
+        vista_eventos = [
+            VistaEventoMapa(
+                id=evento.identificador,
+                x=evento.x,
+                y=evento.y,
+                prioridad=evento.prioridad,
+                magnitud=evento.magnitud,
+                en_zona_poblada=evento.en_zona_poblada,
+                estado=evento.estado.value,
+                acceso_costoso=evento.identificador in costosos_ids,
+            )
+            for evento in self.indice_activos.values()
+        ]
+
+        return vista_zonas, vista_eventos
 
     def cargar_por_inserciones(self, datos: dict) -> dict:
         """Load events from JSON insertion mode with full validation and atomic replacement."""
