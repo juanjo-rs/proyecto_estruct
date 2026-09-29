@@ -29,6 +29,11 @@ class VentanaSismoLab(tk.Tk):
         ).pack(padx=28)
         self.estado = ttk.Label(self, text="Eventos activos: 0 | Cola: 0 | Modo normal")
         self.estado.pack(pady=20)
+        ttk.Button(self, text="Crear evento", command=self.abrir_crear_evento).pack(pady=4)
+        ttk.Button(self, text="Consultar evento", command=self.abrir_consultar_evento).pack(pady=4)
+        ttk.Button(self, text="Corregir evento", command=self.abrir_corregir_evento).pack(pady=4)
+        ttk.Button(self, text="Marcar revisado", command=self.abrir_marcar_revisado).pack(pady=4)
+        ttk.Button(self, text="Eliminar evento", command=self.abrir_eliminar_evento).pack(pady=4)
         ttk.Button(self, text="Actualizar indicadores", command=self.actualizar_indicadores).pack()
         ttk.Button(self, text="Activar modo estres", command=self.activar_estres).pack(pady=4)
         ttk.Button(self, text="Desactivar (recuperar)", command=self.desactivar_estres).pack(pady=4)
@@ -40,11 +45,187 @@ class VentanaSismoLab(tk.Tk):
         ttk.Button(self, text="Verificar estructura", command=self.verificar_estructura).pack(pady=4)
         ttk.Button(self, text="Indicadores detallados", command=self.mostrar_indicadores_detallados).pack(pady=4)
 
+    def _abrir_formulario(self, titulo: str, campos: tuple[tuple[str, str], ...], al_aceptar) -> None:
+        """Show labeled entries. al_aceptar receives the stripped text of each field."""
+        dialogo = tk.Toplevel(self)
+        dialogo.title(titulo)
+        dialogo.transient(self)
+        entradas: dict[str, ttk.Entry] = {}
+        for fila, (clave, etiqueta) in enumerate(campos):
+            ttk.Label(dialogo, text=etiqueta).grid(row=fila, column=0, padx=8, pady=4, sticky="w")
+            caja = ttk.Entry(dialogo, width=28)
+            caja.grid(row=fila, column=1, padx=8, pady=4)
+            entradas[clave] = caja
+
+        def aceptar() -> None:
+            valores = {clave: caja.get().strip() for clave, caja in entradas.items()}
+            if al_aceptar(dialogo, valores):
+                dialogo.destroy()
+                self.actualizar_indicadores()
+
+        ttk.Button(dialogo, text="Aceptar", command=aceptar).grid(
+            row=len(campos), column=1, padx=8, pady=8, sticky="e"
+        )
+
+    def _leer_identificador(self, texto: str) -> int:
+        """Convert a form id into an int. ValueError is shown by the caller."""
+        return int(texto)
+
+    def abrir_crear_evento(self) -> None:
+        """Create one event by calling the catalog with the form values."""
+        campos = (
+            ("identificador", "Identificador"),
+            ("magnitud", "Magnitud"),
+            ("profundidad_hipocentro", "Profundidad (km)"),
+            ("x", "X"),
+            ("y", "Y"),
+            ("ocurrencia", "Ocurrencia UTC"),
+            ("estacion", "Estacion"),
+        )
+
+        def al_aceptar(dialogo: tk.Toplevel, valores: dict[str, str]) -> bool:
+            try:
+                nuevo = Evento(
+                    identificador=self._leer_identificador(valores["identificador"]),
+                    magnitud=valores["magnitud"],
+                    profundidad_hipocentro=valores["profundidad_hipocentro"],
+                    x=valores["x"],
+                    y=valores["y"],
+                    ocurrencia=valores["ocurrencia"],
+                    revision=1,
+                    estaciones={valores["estacion"]},
+                )
+                creado = self.catalogo.crear_evento(nuevo)
+            except (ValueError, KeyError) as error:
+                messagebox.showerror("Crear evento", str(error), parent=dialogo)
+                return False
+            messagebox.showinfo(
+                "Crear evento",
+                f"SIS-{creado.identificador:06d} prioridad {creado.prioridad}",
+                parent=dialogo,
+            )
+            return True
+
+        self._abrir_formulario("Crear evento", campos, al_aceptar)
+
+    def abrir_consultar_evento(self) -> None:
+        """Show the catalog state of one id without changing the trees."""
+        def al_aceptar(dialogo: tk.Toplevel, valores: dict[str, str]) -> bool:
+            try:
+                identificador = self._leer_identificador(valores["identificador"])
+                estado, evento = self.catalogo.consultar(identificador)
+            except (ValueError, KeyError) as error:
+                messagebox.showerror("Consultar evento", str(error), parent=dialogo)
+                return False
+            if evento is None:
+                texto = f"SIS-{identificador:06d}: {estado}"
+            else:
+                texto = (
+                    f"SIS-{evento.identificador:06d}: {estado}\n"
+                    f"prioridad {evento.prioridad} | magnitud {evento.magnitud}\n"
+                    f"profundidad {evento.profundidad_hipocentro} km | "
+                    f"({evento.x}, {evento.y})\n"
+                    f"revision {evento.revision} | {evento.estado.value}"
+                )
+            messagebox.showinfo("Consultar evento", texto, parent=dialogo)
+            return True
+
+        self._abrir_formulario("Consultar evento", (("identificador", "Identificador"),), al_aceptar)
+
+    def abrir_corregir_evento(self) -> None:
+        """Send only the filled fields to corregir_evento."""
+        campos = (
+            ("identificador", "Identificador"),
+            ("magnitud", "Magnitud"),
+            ("profundidad_hipocentro", "Profundidad (km)"),
+            ("x", "X"),
+            ("y", "Y"),
+            ("ocurrencia", "Ocurrencia UTC"),
+        )
+
+        def al_aceptar(dialogo: tk.Toplevel, valores: dict[str, str]) -> bool:
+            try:
+                identificador = self._leer_identificador(valores["identificador"])
+                datos = {
+                    campo: valores[campo]
+                    for campo in ("magnitud", "profundidad_hipocentro", "x", "y", "ocurrencia")
+                    if valores[campo]
+                }
+                if not datos:
+                    raise ValueError("Escribe al menos un campo para corregir.")
+                corregido = self.catalogo.corregir_evento(identificador, datos)
+            except (ValueError, KeyError) as error:
+                messagebox.showerror("Corregir evento", str(error), parent=dialogo)
+                return False
+            messagebox.showinfo(
+                "Corregir evento",
+                f"SIS-{corregido.identificador:06d} revision {corregido.revision} "
+                f"prioridad {corregido.prioridad}",
+                parent=dialogo,
+            )
+            return True
+
+        self._abrir_formulario("Corregir evento", campos, al_aceptar)
+
+    def abrir_marcar_revisado(self) -> None:
+        """Mark one active event as reviewed. The key does not change."""
+        def al_aceptar(dialogo: tk.Toplevel, valores: dict[str, str]) -> bool:
+            try:
+                identificador = self._leer_identificador(valores["identificador"])
+                evento = self.catalogo.marcar_revisado(identificador)
+            except (ValueError, KeyError) as error:
+                messagebox.showerror("Marcar revisado", str(error), parent=dialogo)
+                return False
+            messagebox.showinfo(
+                "Marcar revisado",
+                f"SIS-{evento.identificador:06d} quedo {evento.estado.value}",
+                parent=dialogo,
+            )
+            return True
+
+        self._abrir_formulario("Marcar revisado", (("identificador", "Identificador"),), al_aceptar)
+
+    def abrir_eliminar_evento(self) -> None:
+        """Remove one active event through the catalog after confirmation."""
+        def al_aceptar(dialogo: tk.Toplevel, valores: dict[str, str]) -> bool:
+            try:
+                identificador = self._leer_identificador(valores["identificador"])
+            except ValueError as error:
+                messagebox.showerror("Eliminar evento", str(error), parent=dialogo)
+                return False
+            if not messagebox.askyesno(
+                "Eliminar evento",
+                f"Eliminar SIS-{identificador:06d}?",
+                parent=dialogo,
+            ):
+                return False
+            try:
+                self.catalogo.eliminar_evento(identificador)
+            except (ValueError, KeyError) as error:
+                messagebox.showerror("Eliminar evento", str(error), parent=dialogo)
+                return False
+            messagebox.showinfo(
+                "Eliminar evento",
+                f"SIS-{identificador:06d} quedo eliminado",
+                parent=dialogo,
+            )
+            return True
+
+        self._abrir_formulario("Eliminar evento", (("identificador", "Identificador"),), al_aceptar)
+    
+
     def actualizar_indicadores(self) -> None:
         modo = "estres" if self.catalogo.modo_estres else "normal"
+        datos = self.catalogo.indicadores()
+        avl = datos["avl"]
         self.estado.config(
-            text=f"Eventos activos: {len(self.catalogo.indice_activos)} | "
-            f"Cola: {len(self.catalogo.reportes_pendientes)} | Modo {modo}"
+            text=(
+                f"Eventos activos: {len(self.catalogo.indice_activos)} | "
+                f"Cola: {len(self.catalogo.reportes_pendientes)} | Modo {modo} | "
+                f"AVL h={avl['altura']} hojas={avl['hojas']} "
+                f"giros={avl['giros_izquierda'] + avl['giros_derecha']} | "
+                f"Acceso costoso: {len(datos['acceso_costoso'])}"
+            )
         )
 
     def activar_estres(self) -> None:
