@@ -20,13 +20,16 @@ from .dominio import (
     EstadoAtencion,
     Evento,
     Reporte,
+    VistaEventoMapa,
+    VistaNodo,
+    VistaZona,
     Zona,
     calcular_prioridad,
     clasificar_zona_poblada,
     fecha_utc,
 )
-from .nodo import NodoArbol
 from .pila import Pila
+from .nodo import NodoArbol
 
 
 @dataclass(frozen=True)
@@ -84,7 +87,6 @@ class InstantaneaCatalogo:
         catalogo.asociaciones = self.asociaciones
         catalogo.metricas = self.metricas
 
-
 @dataclass(frozen=True)
 class RamaArchivable:
     """Eligible subtree: root id, depth from the AVL root, and frozen member ids."""
@@ -92,6 +94,7 @@ class RamaArchivable:
     id_raiz: int
     profundidad: int
     identificadores: tuple[int, ...]
+
 
 
 class CatalogoSismico:
@@ -189,6 +192,7 @@ class CatalogoSismico:
             "L": limite if limite_valido else None,
             "acceso_costoso": costosos,
         }
+
 
     def crear_evento(self, evento: Evento, registrar_accion: bool = True) -> Evento:
         """Create one active event after all validation succeeds."""
@@ -335,6 +339,7 @@ class CatalogoSismico:
             self.archivados[identificador] = evento
         return ganadora
 
+
     def encolar_reporte(self, reporte: Reporte) -> None:
         if not reporte.estacion.strip():
             raise ValueError("El reporte debe indicar su estacion emisora.")
@@ -408,6 +413,94 @@ class CatalogoSismico:
             raise ValueError("El reloj de simulacion no puede retroceder.")
         self._registrar_instantanea("Avanzar reloj de simulacion")
         self.reloj = nuevo
+
+    def obtener_vista_arbol(self, tipo: str) -> tuple[dict[int, VistaNodo], Optional[int]]:
+        """
+        Get an immutable view of the AVL or BST tree for GUI rendering.
+
+        Args:
+            tipo: "avl" or "bst"
+
+        Returns:
+            (dict of id -> VistaNodo, root_id or None)
+
+        Raises:
+            ValueError: If tipo is not "avl" or "bst"
+        """
+        if tipo not in ("avl", "bst"):
+            raise ValueError("Tipo debe ser 'avl' o 'bst'.")
+
+        arbol = self.avl if tipo == "avl" else self.bst
+        vista: dict[int, VistaNodo] = {}
+
+        def recorrer(nodo: Optional[NodoArbol]) -> Optional[int]:
+            if nodo is None:
+                return None
+
+            nodo_id = nodo.evento.identificador
+            izquierdo_id = recorrer(nodo.izquierda)
+            derecho_id = recorrer(nodo.derecha)
+
+            # Calculate balance factor for AVL, None for BST
+            factor = None
+            if tipo == "avl":
+                from .arbol_avl import ArbolAVL
+                factor = ArbolAVL._factor(nodo)
+
+            vista[nodo_id] = VistaNodo(
+                id=nodo_id,
+                clave=nodo.evento.clave(),
+                izquierdo_id=izquierdo_id,
+                derecho_id=derecho_id,
+                altura=nodo.altura,
+                factor=factor,
+            )
+
+            return nodo_id
+
+        raiz_id = recorrer(arbol.raiz)
+        return vista, raiz_id
+
+    def obtener_vista_mapa(self) -> tuple[list[VistaZona], list[VistaEventoMapa]]:
+        """
+        Get an immutable view of zones and active events for map rendering.
+
+        Returns:
+            (list of VistaZona, list of VistaEventoMapa)
+        """
+        # Create zone views
+        vista_zonas = [
+            VistaZona(
+                nombre=zona.nombre,
+                x_min=zona.x_min,
+                x_max=zona.x_max,
+                y_min=zona.y_min,
+                y_max=zona.y_max,
+                poblada=zona.poblada,
+            )
+            for zona in self.zonas
+        ]
+
+        # Get expensive access IDs from indicators
+        indicadores = self.indicadores()
+        costosos_ids = {item["identificador"] for item in indicadores["acceso_costoso"]}
+
+        # Create event views
+        vista_eventos = [
+            VistaEventoMapa(
+                id=evento.identificador,
+                x=evento.x,
+                y=evento.y,
+                prioridad=evento.prioridad,
+                magnitud=evento.magnitud,
+                en_zona_poblada=evento.en_zona_poblada,
+                estado=evento.estado.value,
+                acceso_costoso=evento.identificador in costosos_ids,
+            )
+            for evento in self.indice_activos.values()
+        ]
+
+        return vista_zonas, vista_eventos
 
     def cargar_por_inserciones(self, datos: dict) -> dict:
         """Load events from JSON insertion mode with full validation and atomic replacement."""
