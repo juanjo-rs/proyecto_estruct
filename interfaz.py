@@ -35,8 +35,10 @@ class VentanaSismoLab(tk.Tk):
         ttk.Button(self, text="Gestionar cola de reportes", command=self.abrir_ventana_cola).pack(pady=4)
         ttk.Button(self, text="Visualizar arboles", command=self.abrir_ventana_visualizacion).pack(pady=4)
         ttk.Button(self, text="Visualizar mapa", command=self.abrir_ventana_mapa).pack(pady=4)
-        ttk.Button(self, text="Guardar version", command=self.guardar_version).pack(pady=4)
-        ttk.Button(self, text="Restaurar version", command=self.restaurar_version).pack(pady=4)
+        ttk.Button(self, text="Deshacer", command=self.deshacer_accion).pack(pady=4)
+        ttk.Button(self, text="Gestionar versiones", command=self.abrir_ventana_versiones).pack(pady=4)
+        ttk.Button(self, text="Verificar estructura", command=self.verificar_estructura).pack(pady=4)
+        ttk.Button(self, text="Indicadores detallados", command=self.mostrar_indicadores_detallados).pack(pady=4)
 
     def actualizar_indicadores(self) -> None:
         modo = "estres" if self.catalogo.modo_estres else "normal"
@@ -68,63 +70,196 @@ class VentanaSismoLab(tk.Tk):
             except Exception as e:
                 print(f"Error al cargar JSON: {e}")
 
-    def guardar_version(self) -> None:
-        """GUI function to save the current scenario as a version."""
-        nombre = simpledialog.askstring(
-            "Guardar version",
-            "Ingrese el nombre de la version:",
-            parent=self,
-        )
-        if nombre:
-            try:
-                ruta = self.catalogo.guardar_version(nombre)
-                messagebox.showinfo("Version guardada", f"Version guardada exitosamente en:\n{ruta}")
-            except ValueError as e:
-                messagebox.showerror("Error", str(e))
-            except PermissionError as e:
-                messagebox.showerror("Error de permisos", str(e))
-            except Exception as e:
-                messagebox.showerror("Error", f"Error inesperado: {e}")
+    def deshacer_accion(self) -> None:
+        """Undo the last action using the catalog's history stack."""
+        try:
+            mensaje = self.catalogo.deshacer()
+            messagebox.showinfo("Deshacer", mensaje)
+            self.actualizar_indicadores()
+        except IndexError as e:
+            messagebox.showwarning("Deshacer", str(e))
+        except Exception as e:
+            messagebox.showerror("Error", f"Error al deshacer: {e}")
 
-    def restaurar_version(self) -> None:
-        """GUI function to restore a version from the list."""
-        versiones = self.catalogo.listar_versiones()
-        if not versiones:
-            messagebox.showinfo("Versiones", "No hay versiones disponibles para restaurar.")
-            return
+    def abrir_ventana_versiones(self) -> None:
+        """Open the version management window with save/restore/delete functionality."""
+        ventana_versiones = tk.Toplevel(self)
+        ventana_versiones.title("Gestion de Versiones")
+        ventana_versiones.geometry("500x400")
 
-        # Create a dialog to select a version
-        dialog = tk.Toplevel(self)
-        dialog.title("Restaurar version")
-        dialog.geometry("400x300")
+        # Frame for version list
+        frame_lista = ttk.Frame(ventana_versiones)
+        frame_lista.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
-        ttk.Label(dialog, text="Seleccione una version para restaurar:").pack(pady=10)
+        ttk.Label(frame_lista, text="Versiones disponibles:").pack(anchor=tk.W)
 
-        listbox = tk.Listbox(dialog)
-        listbox.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        for version in versiones:
-            listbox.insert(tk.END, version)
+        listbox = tk.Listbox(frame_lista)
+        listbox.pack(fill=tk.BOTH, expand=True, pady=5)
 
-        def confirmar_restauracion():
+        scrollbar = ttk.Scrollbar(frame_lista, orient=tk.VERTICAL, command=listbox.yview)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        listbox.config(yscrollcommand=scrollbar.set)
+
+        # Refresh version list
+        def actualizar_lista():
+            listbox.delete(0, tk.END)
+            versiones = self.catalogo.listar_versiones()
+            for version in versiones:
+                listbox.insert(tk.END, version)
+
+        actualizar_lista()
+
+        # Frame for buttons
+        frame_botones = ttk.Frame(ventana_versiones)
+        frame_botones.pack(fill=tk.X, padx=10, pady=10)
+
+        def guardar_nueva_version():
+            nombre = simpledialog.askstring(
+                "Guardar version",
+                "Ingrese el nombre de la version:",
+                parent=ventana_versiones,
+            )
+            if nombre:
+                try:
+                    ruta = self.catalogo.guardar_version(nombre)
+                    messagebox.showinfo("Version guardada", f"Version guardada exitosamente en:\n{ruta}")
+                    actualizar_lista()
+                except ValueError as e:
+                    messagebox.showerror("Error", str(e))
+                except PermissionError as e:
+                    messagebox.showerror("Error de permisos", str(e))
+                except Exception as e:
+                    messagebox.showerror("Error", f"Error inesperado: {e}")
+
+        def restaurar_seleccionada():
             seleccion = listbox.curselection()
             if not seleccion:
                 messagebox.showwarning("Seleccion", "Seleccione una version.")
                 return
-            nombre = versiones[seleccion[0]]
-            dialog.destroy()
-            try:
-                self.catalogo.restaurar_version(nombre)
-                self.actualizar_indicadores()
-                messagebox.showinfo("Version restaurada", f"Version '{nombre}' restaurada exitosamente.")
-            except ValueError as e:
-                messagebox.showerror("Error", str(e))
-            except PermissionError as e:
-                messagebox.showerror("Error de permisos", str(e))
-            except Exception as e:
-                messagebox.showerror("Error", f"Error inesperado: {e}")
+            nombre = listbox.get(seleccion[0])
+            if messagebox.askyesno("Confirmar", f"¿Restaurar version '{nombre}'?"):
+                try:
+                    self.catalogo.restaurar_version(nombre)
+                    messagebox.showinfo("Version restaurada", f"Version '{nombre}' restaurada exitosamente.")
+                    self.actualizar_indicadores()
+                    actualizar_lista()
+                except FileNotFoundError as e:
+                    messagebox.showerror("Error", str(e))
+                except Exception as e:
+                    messagebox.showerror("Error", f"Error al restaurar: {e}")
 
-        ttk.Button(dialog, text="Restaurar", command=confirmar_restauracion).pack(pady=10)
-        ttk.Button(dialog, text="Cancelar", command=dialog.destroy).pack(pady=5)
+        def eliminar_seleccionada():
+            seleccion = listbox.curselection()
+            if not seleccion:
+                messagebox.showwarning("Seleccion", "Seleccione una version.")
+                return
+            nombre = listbox.get(seleccion[0])
+            if messagebox.askyesno("Confirmar", f"¿Eliminar version '{nombre}'?"):
+                try:
+                    import os
+                    from src.catalogo import _obtener_ruta_version
+                    ruta = _obtener_ruta_version(nombre)
+                    os.remove(ruta)
+                    messagebox.showinfo("Version eliminada", f"Version '{nombre}' eliminada exitosamente.")
+                    actualizar_lista()
+                except FileNotFoundError as e:
+                    messagebox.showerror("Error", str(e))
+                except PermissionError as e:
+                    messagebox.showerror("Error de permisos", str(e))
+                except Exception as e:
+                    messagebox.showerror("Error", f"Error al eliminar: {e}")
+
+        ttk.Button(frame_botones, text="Guardar nueva version", command=guardar_nueva_version).pack(side=tk.LEFT, padx=2)
+        ttk.Button(frame_botones, text="Restaurar seleccionada", command=restaurar_seleccionada).pack(side=tk.LEFT, padx=2)
+        ttk.Button(frame_botones, text="Eliminar seleccionada", command=eliminar_seleccionada).pack(side=tk.LEFT, padx=2)
+        ttk.Button(frame_botones, text="Actualizar lista", command=actualizar_lista).pack(side=tk.LEFT, padx=2)
+
+    def verificar_estructura(self) -> None:
+        """Verify AVL structure and show results, distinguishing expected imbalance in stress mode."""
+        exigir_balanceo = not self.catalogo.modo_estres
+        resultado = self.catalogo.avl.auditar(exigir_balanceo=exigir_balanceo)
+
+        ventana_resultado = tk.Toplevel(self)
+        ventana_resultado.title("Verificacion de Estructura AVL")
+        ventana_resultado.geometry("500x400")
+
+        frame_resultado = ttk.Frame(ventana_resultado)
+        frame_resultado.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        # Show mode
+        modo = "Modo ESTRES (desbalance esperado)" if self.catalogo.modo_estres else "Modo NORMAL (balance requerido)"
+        ttk.Label(frame_resultado, text=modo, font=("Segoe UI", 10, "bold")).pack(pady=5)
+
+        # Show results
+        orden_texto = "✓ Orden BST correcto" if resultado.orden_correcto else "✗ Orden BST incorrecto"
+        alturas_texto = "✓ Alturas correctas" if resultado.alturas_correctas else "✗ Alturas incorrectas"
+        balance_texto = "✓ Balance AVL correcto" if resultado.balanceado else "✗ Balance AVL incorrecto"
+
+        ttk.Label(frame_resultado, text=orden_texto, foreground="green" if resultado.orden_correcto else "red").pack(anchor=tk.W, pady=2)
+        ttk.Label(frame_resultado, text=alturas_texto, foreground="green" if resultado.alturas_correctas else "red").pack(anchor=tk.W, pady=2)
+        ttk.Label(frame_resultado, text=balance_texto, foreground="green" if resultado.balanceado else "red").pack(anchor=tk.W, pady=2)
+
+        # Show errors if any
+        if resultado.errores:
+            ttk.Separator(frame_resultado, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=10)
+            ttk.Label(frame_resultado, text="Errores encontrados:", font=("Segoe UI", 10, "bold")).pack(anchor=tk.W)
+            text_errores = tk.Text(frame_resultado, height=10, wrap=tk.WORD)
+            text_errores.pack(fill=tk.BOTH, expand=True, pady=5)
+            scrollbar_errores = ttk.Scrollbar(frame_resultado, orient=tk.VERTICAL, command=text_errores.yview)
+            scrollbar_errores.pack(side=tk.RIGHT, fill=tk.Y)
+            text_errores.config(yscrollcommand=scrollbar_errores.set)
+            for error in resultado.errores:
+                text_errores.insert(tk.END, error + "\n")
+            text_errores.config(state=tk.DISABLED)
+        else:
+            ttk.Label(frame_resultado, text="No se encontraron errores.", foreground="green").pack(pady=10)
+
+    def mostrar_indicadores_detallados(self) -> None:
+        """Show detailed indicators in a popup window."""
+        indicadores = self.catalogo.indicadores()
+
+        ventana_indicadores = tk.Toplevel(self)
+        ventana_indicadores.title("Indicadores Detallados")
+        ventana_indicadores.geometry("500x450")
+
+        frame_indicadores = ttk.Frame(ventana_indicadores)
+        frame_indicadores.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        # AVL indicators
+        ttk.Label(frame_indicadores, text="Indicadores AVL", font=("Segoe UI", 12, "bold")).pack(anchor=tk.W, pady=5)
+        avl_data = indicadores["avl"]
+        ttk.Label(frame_indicadores, text=f"Altura: {avl_data['altura']}").pack(anchor=tk.W)
+        ttk.Label(frame_indicadores, text=f"Hojas: {avl_data['hojas']}").pack(anchor=tk.W)
+        ttk.Label(frame_indicadores, text=f"Profundidad maxima: {avl_data['profundidad_maxima']}").pack(anchor=tk.W)
+        ttk.Label(frame_indicadores, text=f"Casos RR: {avl_data['casos_rr']}").pack(anchor=tk.W)
+        ttk.Label(frame_indicadores, text=f"Casos LR: {avl_data['casos_lr']}").pack(anchor=tk.W)
+        ttk.Label(frame_indicadores, text=f"Casos RL: {avl_data['casos_rl']}").pack(anchor=tk.W)
+
+        ttk.Separator(frame_indicadores, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=10)
+
+        # BST indicators
+        ttk.Label(frame_indicadores, text="Indicadores BST", font=("Segoe UI", 12, "bold")).pack(anchor=tk.W, pady=5)
+        bst_data = indicadores["bst"]
+        ttk.Label(frame_indicadores, text=f"Altura: {bst_data['altura']}").pack(anchor=tk.W)
+        ttk.Label(frame_indicadores, text=f"Hojas: {bst_data['hojas']}").pack(anchor=tk.W)
+        ttk.Label(frame_indicadores, text=f"Profundidad maxima: {bst_data['profundidad_maxima']}").pack(anchor=tk.W)
+
+        ttk.Separator(frame_indicadores, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=10)
+
+        # Expensive access
+        ttk.Label(frame_indicadores, text="Acceso Costoso (profundidad > L)", font=("Segoe UI", 12, "bold")).pack(anchor=tk.W, pady=5)
+        costosos = indicadores["acceso_costoso"]
+        if costosos:
+            text_costosos = tk.Text(frame_indicadores, height=8, wrap=tk.WORD)
+            text_costosos.pack(fill=tk.BOTH, expand=True, pady=5)
+            scrollbar_costosos = ttk.Scrollbar(frame_indicadores, orient=tk.VERTICAL, command=text_costosos.yview)
+            scrollbar_costosos.pack(side=tk.RIGHT, fill=tk.Y)
+            text_costosos.config(yscrollcommand=scrollbar_costosos.set)
+            for item in costosos:
+                text_costosos.insert(tk.END, f"ID: {item['identificador']}, Profundidad: {item['profundidad']}, Examinados: {item['examinados']}\n")
+            text_costosos.config(state=tk.DISABLED)
+        else:
+            ttk.Label(frame_indicadores, text="No hay eventos con acceso costoso.").pack(anchor=tk.W)
 
     def abrir_ventana_cola(self) -> None:
         """Open the queue management window."""
