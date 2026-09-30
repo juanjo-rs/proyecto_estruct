@@ -1,8 +1,7 @@
 import json
 from datetime import datetime, timezone
-from operator import truediv
-from pickle import TRUE
 from unittest import TestCase
+from typing import assert_type
 
 from src.arbol_avl import ArbolAVL
 from src.catalogo import CatalogoSismico
@@ -12,21 +11,14 @@ from src.dominio import EstadoAtencion, Evento, Reporte, Zona
 RELOJ = datetime(2026, 9, 7, 12, 0, tzinfo=timezone.utc)
 
 
-def evento(
-    identificador: int,
-    magnitud: float = 4.5,
-    revision: int = 1,
-    estacion: str = "EST-01",
-    profundidad_hipocentro: float = 30.0,
-    ocurrencia: str = "2026-09-07T10:00:00Z",
-) -> Evento:
+def evento(identificador: int, magnitud: float = 4.5, revision: int = 1, estacion: str = "EST-01", profundidad_hipocentro: float = 30.0) -> Evento:
     return Evento(
         identificador=identificador,
         magnitud=magnitud,
         profundidad_hipocentro=profundidad_hipocentro,
         x=100.0,
         y=100.0,
-        ocurrencia=ocurrencia,
+        ocurrencia="2026-09-07T10:00:00Z",
         revision=revision,
         estaciones={estacion},
     )
@@ -128,6 +120,30 @@ class PruebasBase(TestCase):
         with self.assertRaisesRegex(IndexError, "No hay acciones para deshacer"):
             self.catalogo.deshacer()
 
+    def test_indicadores_de_giro_se_restauran_al_deshacer(self) -> None:
+        for identificador in (10, 20, 30):
+            self.catalogo.crear_evento(evento(identificador))
+        antes = self.catalogo.indicadores()
+        self.assertEqual(antes["avl"]["casos_rr"], 1)
+        self.assertEqual(antes["avl"]["hojas"], 2)
+        self.assertGreater(antes["bst"]["altura"], antes["avl"]["altura"])
+        self.catalogo.deshacer()
+        despues = self.catalogo.indicadores()
+        self.assertEqual(despues["avl"]["casos_rr"], 0)
+        self.assertEqual(despues["avl"]["hojas"], 1)
+        self.assertEqual(self.catalogo.consultar(30)[0], "desconocido")
+
+    def test_acceso_costoso_si_profundidad_supera_L(self) -> None:
+        self.catalogo.parametros["L"] = 0
+        for identificador in (10, 20, 30):
+            self.catalogo.crear_evento(evento(identificador))
+        costosos = self.catalogo.indicadores()["acceso_costoso"]
+        self.assertEqual(sorted(item["identificador"] for item in costosos), [10, 30])
+        self.assertTrue(all(item["profundidad"] > 0 for item in costosos))
+        self.assertTrue(all(item["examinados"] >= 1 for item in costosos))
+        self.catalogo.parametros["L"] = 1
+        self.assertEqual(self.catalogo.indicadores()["acceso_costoso"], [])    
+
     def test_correccion_invalida_no_crea_instantanea(self) -> None:
         self.catalogo.crear_evento(evento(10))
         cantidad_antes = len(self.catalogo.historial)
@@ -177,8 +193,6 @@ class PruebasBase(TestCase):
         self.assertTrue(self.catalogo.avl.auditar().balanceado)
         self.assertFalse(self.catalogo.modo_estres)
         self.assertFalse(self.catalogo.cola_pausada)
-
-    
 
     def test_listar_ramas_archivables_no_muta_y_elige_subarbol_completo(self) -> None:
         self.catalogo.parametros["T"] = 60
@@ -248,7 +262,7 @@ class PruebasBase(TestCase):
             [item.identificador for item in self.catalogo.avl.inorden()],
             [item.identificador for item in self.catalogo.bst.inorden()],
         )
-
+        
     def test_desempate_raiz_mas_profunda(self) -> None:
         self.catalogo.parametros["T"] = 60
         self.catalogo.activar_modo_estres()
@@ -264,7 +278,7 @@ class PruebasBase(TestCase):
         self.catalogo.archivar_rama()
         self.assertEqual(self.catalogo.consultar(15)[0], "archivado")
         self.assertEqual(self.catalogo.consultar(5)[0], "activo")
-        self.assertEqual(self.catalogo.consultar(10)[0], "activo")
+        self.assertEqual(self.catalogo.consultar(10)[0], "activo")   
 
     def  test_sincronizacion_arboles_avl_y_bst(self) -> None:
         for identificador in (10,20,30):
@@ -277,30 +291,6 @@ class PruebasBase(TestCase):
         self.catalogo.eliminar_evento(20)
         self.assertEqual([x.identificador for x in self.catalogo.avl.inorden()],
                         [y.identificador for y in self.catalogo.bst.inorden()])
-
-    def test_indicadores_de_giro_se_restauran_al_deshacer(self) -> None:
-        for identificador in (10, 20, 30):
-            self.catalogo.crear_evento(evento(identificador))
-        antes = self.catalogo.indicadores()
-        self.assertEqual(antes["avl"]["casos_rr"], 1)
-        self.assertEqual(antes["avl"]["hojas"], 2)
-        self.assertGreater(antes["bst"]["altura"], antes["avl"]["altura"])
-        self.catalogo.deshacer()
-        despues = self.catalogo.indicadores()
-        self.assertEqual(despues["avl"]["casos_rr"], 0)
-        self.assertEqual(despues["avl"]["hojas"], 1)
-        self.assertEqual(self.catalogo.consultar(30)[0], "desconocido")
-
-    def test_acceso_costoso_si_profundidad_supera_L(self) -> None:
-        self.catalogo.parametros["L"] = 0
-        for identificador in (10, 20, 30):
-            self.catalogo.crear_evento(evento(identificador))
-        costosos = self.catalogo.indicadores()["acceso_costoso"]
-        self.assertEqual(sorted(item["identificador"] for item in costosos), [10, 30])
-        self.assertTrue(all(item["profundidad"] > 0 for item in costosos))
-        self.assertTrue(all(item["examinados"] >= 1 for item in costosos))
-        self.catalogo.parametros["L"] = 1
-        self.assertEqual(self.catalogo.indicadores()["acceso_costoso"], [])
 
     def test_casos_balanceo_RR(self) -> None:
         for identificador in (10,20,30):
@@ -356,8 +346,8 @@ class PruebasBase(TestCase):
         self.assertTrue(abs(self.catalogo.avl._factor(self.catalogo.avl.raiz))>2)
         self.catalogo.avl.recuperar_balance()
         arbol = self.catalogo.avl.auditar(exigir_balanceo=True)
+        self.assertTrue(arbol.orden_correcto)
         self.assertTrue(arbol.balanceado)
-
 
     def test_exportar_escenario_completo_contiene_todos_los_elementos(self) -> None:
         # Create a non-trivial topology with different priorities

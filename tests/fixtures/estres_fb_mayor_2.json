@@ -1,0 +1,131 @@
+{
+  "version": 1,
+  "tipo_carga": "topologia",
+  "reloj": "2026-09-07T12:00:00Z",
+  "modo": "estres",
+  "zonas": [
+    {
+      "nombre": "Ciudad",
+      "x_min": 0.0,
+      "x_max": 500.0,
+      "y_min": 0.0,
+      "y_max": 500.0,
+      "poblada": true
+    }
+  ],
+  "raiz": 7,
+  "nodos": {
+    "1": {
+      "evento": {
+        "identificador": 1,
+        "magnitud": 4.0,
+        "profundidad_hipocentro": 30.0,
+        "x": 100.0,
+        "y": 100.0,
+        "ocurrencia": "2026-09-07T10:00:00Z",
+        "revision": 1,
+        "estaciones": ["EST-01"]
+      },
+      "altura": 0,
+      "factor": 0,
+      "izquierdo": null,
+      "derecho": null
+    },
+    "2": {
+      "evento": {
+        "identificador": 2,
+        "magnitud": 4.1,
+        "profundidad_hipocentro": 30.0,
+        "x": 120.0,
+        "y": 120.0,
+        "ocurrencia": "2026-09-07T10:05:00Z",
+        "revision": 1,
+        "estaciones": ["EST-02"]
+      },
+      "altura": 1,
+      "factor": 1,
+      "izquierdo": 1,
+      "derecho": null
+    },
+    "3": {
+      "evento": {
+        "identificador": 3,
+        "magnitud": 4.2,
+        "profundidad_hipocentro": 30.0,
+        "x": 140.0,
+        "y": 140.0,
+        "ocurrencia": "2026-09-07T10:10:00Z",
+        "revision": 1,
+        "estaciones": ["EST-03"]
+      },
+      "altura": 2,
+      "factor": 2,
+      "izquierdo": 2,
+      "derecho": null
+    },
+    "4": {
+      "evento": {
+        "identificador": 4,
+        "magnitud": 4.3,
+        "profundidad_hipocentro": 30.0,
+        "x": 160.0,
+        "y": 160.0,
+        "ocurrencia": "2026-09-07T10:15:00Z",
+        "revision": 1,
+        "estaciones": ["EST-04"]
+      },
+      "altura": 3,
+      "factor": 3,
+      "izquierdo": 3,
+      "derecho": null
+    },
+    "5": {
+      "evento": {
+        "identificador": 5,
+        "magnitud": 4.4,
+        "profundidad_hipocentro": 30.0,
+        "x": 180.0,
+        "y": 180.0,
+        "ocurrencia": "2026-09-07T10:20:00Z",
+        "revision": 1,
+        "estaciones": ["EST-05"]
+      },
+      "altura": 4,
+      "factor": 4,
+      "izquierdo": 4,
+      "derecho": null
+    },
+    "6": {
+      "evento": {
+        "identificador": 6,
+        "magnitud": 4.5,
+        "profundidad_hipocentro": 30.0,
+        "x": 200.0,
+        "y": 200.0,
+        "ocurrencia": "2026-09-07T10:25:00Z",
+        "revision": 1,
+        "estaciones": ["EST-06"]
+      },
+      "altura": 5,
+      "factor": 5,
+      "izquierdo": 5,
+      "derecho": null
+    },
+    "7": {
+      "evento": {
+        "identificador": 7,
+        "magnitud": 4.6,
+        "profundidad_hipocentro": 30.0,
+        "x": 220.0,
+        "y": 220.0,
+        "ocurrencia": "2026-09-07T10:30:00Z",
+        "revision": 1,
+        "estaciones": ["EST-07"]
+      },
+      "altura": 6,
+      "factor": 6,
+      "izquierdo": 6,
+      "derecho": null
+    }
+  }
+}

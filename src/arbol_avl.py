@@ -235,6 +235,7 @@ class ArbolAVL:
 
         yield from recorrer(self.raiz, 0)
 
+
     def recuperar_balance(self) -> int:
         """Repair a stress-mode tree with rotations, never by rebuilding from a list."""
         giros_iniciales = self.giros_izquierda + self.giros_derecha
@@ -254,7 +255,7 @@ class ArbolAVL:
         return self._rebalancear(nodo)
 
     def auditar(self, exigir_balanceo: bool = True) -> ResultadoAuditoria:
-        """Check BST order and heights always. |FB| > 1 sets balanceado False; it is an error only if exigir_balanceo."""
+        """Check global BST order, stored heights, and AVL factors."""
         errores: list[str] = []
         desbalanceado = False
 
@@ -273,9 +274,8 @@ class ArbolAVL:
             if abs(izquierda - derecha) > 1:
                 desbalanceado = True
                 if exigir_balanceo:
-                    errores.append(f"Desbalance AVL en SIS-{nodo.evento.identificador:06d}.")
+                  errores.append(f"Desbalance AVL en SIS-{nodo.evento.identificador:06d}.")
             return esperada
-
 
         revisar(self.raiz, None, None)
         return ResultadoAuditoria(
