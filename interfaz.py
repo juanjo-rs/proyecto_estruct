@@ -7,7 +7,8 @@ import tkinter as tk
 from tkinter import filedialog, simpledialog, ttk, messagebox
 
 from src.catalogo import CatalogoSismico, leer_json_archivo
-from src.dominio import Evento, Reporte, Zona
+from src.dominio import Evento, Reporte, ResultadoConsulta, Zona
+
 
 
 class VentanaSismoLab(tk.Tk):
@@ -44,6 +45,15 @@ class VentanaSismoLab(tk.Tk):
         ttk.Button(self, text="Gestionar versiones", command=self.abrir_ventana_versiones).pack(pady=4)
         ttk.Button(self, text="Verificar estructura", command=self.verificar_estructura).pack(pady=4)
         ttk.Button(self, text="Indicadores detallados", command=self.mostrar_indicadores_detallados).pack(pady=4)
+        ttk.Button(self, text="Cambiar parametro", command=self.abrir_cambiar_parametro).pack(pady=4)
+        ttk.Button(self, text="Configurar estaciones", command=self.abrir_configurar_estaciones).pack(pady=4)
+        ttk.Button(self, text="Avanzar reloj", command=self.abrir_avanzar_reloj).pack(pady=4)
+        ttk.Button(self, text="Consultar asociaciones", command=self.abrir_consultar_asociaciones).pack(pady=4)
+        ttk.Button(self, text="Top-k pendientes", command=self.abrir_top_k_pendientes).pack(pady=4)
+        ttk.Button(self, text="Consultar por magnitud", command=self.abrir_consultar_magnitud).pack(pady=4)
+        ttk.Button(self, text="Consultar por profundidad y fecha", command=self.abrir_consultar_profundidad_fecha).pack(pady=4)
+        ttk.Button(self, text="Acceso costoso", command=self.abrir_acceso_costoso).pack(pady=4)
+
 
     def _abrir_formulario(self, titulo: str, campos: tuple[tuple[str, str], ...], al_aceptar) -> None:
         """Show labeled entries. al_aceptar receives the stripped text of each field."""
@@ -213,6 +223,157 @@ class VentanaSismoLab(tk.Tk):
 
         self._abrir_formulario("Eliminar evento", (("identificador", "Identificador"),), al_aceptar)
     
+    def _texto_consulta(self, resultado: ResultadoConsulta) -> str:
+        """Format a catalog query for a message box. Does not touch the trees."""
+        lineas = [
+            f"Nodos examinados: {resultado.nodos_examinados}",
+            resultado.descripcion_costo,
+        ]
+        if not resultado.resultados:
+            lineas.append("Sin resultados.")
+        for item in resultado.resultados:
+            if isinstance(item, Evento):
+                lineas.append(
+                    f"SIS-{item.identificador:06d} prioridad {item.prioridad} magnitud {item.magnitud}"
+                )
+            else:
+                lineas.append(str(item))
+        return "\n".join(lineas)
+
+    def abrir_cambiar_parametro(self) -> None:
+        """Send W, R, L or T to cambiar_parametro. The catalog validates and snapshots."""
+        campos = (("nombre", "Parametro (W, R, L o T)"), ("valor", "Valor"))
+
+        def al_aceptar(dialogo: tk.Toplevel, valores: dict[str, str]) -> bool:
+            nombre = valores["nombre"].upper()
+            try:
+                valor: object = int(valores["valor"]) if nombre == "L" else valores["valor"]
+                nuevo = self.catalogo.cambiar_parametro(nombre, valor)
+            except (ValueError, KeyError) as error:
+                messagebox.showerror("Cambiar parametro", str(error), parent=dialogo)
+                return False
+            messagebox.showinfo("Cambiar parametro", f"{nombre} = {nuevo}", parent=dialogo)
+            return True
+
+        self._abrir_formulario("Cambiar parametro", campos, al_aceptar)
+
+    def abrir_configurar_estaciones(self) -> None:
+        """Replace the station registry through the catalog."""
+        def al_aceptar(dialogo: tk.Toplevel, valores: dict[str, str]) -> bool:
+            codigos = [parte.strip() for parte in valores["estaciones"].split(",") if parte.strip()]
+            try:
+                if not codigos:
+                    raise ValueError("Escribe al menos una estacion.")
+                self.catalogo.configurar_estaciones(codigos)
+            except (ValueError, KeyError) as error:
+                messagebox.showerror("Configurar estaciones", str(error), parent=dialogo)
+                return False
+            messagebox.showinfo(
+                "Configurar estaciones",
+                "Estaciones: " + ", ".join(sorted(self.catalogo.estaciones)),
+                parent=dialogo,
+            )
+            return True
+
+        self._abrir_formulario(
+            "Configurar estaciones",
+            (("estaciones", "Codigos separados por coma"),),
+            al_aceptar,
+        )
+
+    def abrir_avanzar_reloj(self) -> None:
+        """Advance the simulation clock. The catalog rejects a time in the past."""
+        def al_aceptar(dialogo: tk.Toplevel, valores: dict[str, str]) -> bool:
+            try:
+                self.catalogo.avanzar_reloj(valores["reloj"])
+            except (ValueError, KeyError) as error:
+                messagebox.showerror("Avanzar reloj", str(error), parent=dialogo)
+                return False
+            messagebox.showinfo("Avanzar reloj", f"Reloj: {self.catalogo.reloj.isoformat()}", parent=dialogo)
+            return True
+
+        self._abrir_formulario("Avanzar reloj", (("reloj", "Nuevo reloj UTC"),), al_aceptar)
+
+    def abrir_consultar_asociaciones(self) -> None:
+        """Show candidates and the chosen reference for one id."""
+        def al_aceptar(dialogo: tk.Toplevel, valores: dict[str, str]) -> bool:
+            try:
+                identificador = self._leer_identificador(valores["identificador"])
+                resultado = self.catalogo.consultar_asociaciones(identificador)
+            except (ValueError, KeyError) as error:
+                messagebox.showerror("Consultar asociaciones", str(error), parent=dialogo)
+                return False
+            messagebox.showinfo("Consultar asociaciones", self._texto_consulta(resultado), parent=dialogo)
+            return True
+
+        self._abrir_formulario(
+            "Consultar asociaciones",
+            (("identificador", "Identificador"),),
+            al_aceptar,
+        )
+
+    def abrir_top_k_pendientes(self) -> None:
+        """Ask the catalog for the first k pending events in descending key order."""
+        def al_aceptar(dialogo: tk.Toplevel, valores: dict[str, str]) -> bool:
+            try:
+                resultado = self.catalogo.consultar_top_k_pendientes(int(valores["k"]))
+            except (ValueError, KeyError) as error:
+                messagebox.showerror("Top-k pendientes", str(error), parent=dialogo)
+                return False
+            messagebox.showinfo("Top-k pendientes", self._texto_consulta(resultado), parent=dialogo)
+            return True
+
+        self._abrir_formulario("Top-k pendientes", (("k", "Cantidad k"),), al_aceptar)
+
+    def abrir_consultar_magnitud(self) -> None:
+        """Ask the catalog for active events inside a magnitude interval."""
+        campos = (("minimo", "Magnitud minima"), ("maximo", "Magnitud maxima"))
+
+        def al_aceptar(dialogo: tk.Toplevel, valores: dict[str, str]) -> bool:
+            try:
+                resultado = self.catalogo.consultar_por_magnitud(valores["minimo"], valores["maximo"])
+            except (ValueError, KeyError) as error:
+                messagebox.showerror("Consultar por magnitud", str(error), parent=dialogo)
+                return False
+            messagebox.showinfo("Consultar por magnitud", self._texto_consulta(resultado), parent=dialogo)
+            return True
+
+        self._abrir_formulario("Consultar por magnitud", campos, al_aceptar)
+
+    def abrir_consultar_profundidad_fecha(self) -> None:
+        """Ask the catalog for active events up to a depth and inside a date range."""
+        campos = (
+            ("limite", "Profundidad maxima (km)"),
+            ("inicio", "Fecha inicio UTC"),
+            ("fin", "Fecha fin UTC"),
+        )
+
+        def al_aceptar(dialogo: tk.Toplevel, valores: dict[str, str]) -> bool:
+            try:
+                resultado = self.catalogo.consultar_por_profundidad_y_fecha(
+                    valores["limite"], valores["inicio"], valores["fin"]
+                )
+            except (ValueError, KeyError) as error:
+                messagebox.showerror("Consultar por profundidad y fecha", str(error), parent=dialogo)
+                return False
+            messagebox.showinfo(
+                "Consultar por profundidad y fecha",
+                self._texto_consulta(resultado),
+                parent=dialogo,
+            )
+            return True
+
+        self._abrir_formulario("Consultar por profundidad y fecha", campos, al_aceptar)
+
+    def abrir_acceso_costoso(self) -> None:
+        """Show priority-3 events deeper than L. Read-only."""
+        try:
+            resultado = self.catalogo.consultar_acceso_costoso()
+        except ValueError as error:
+            messagebox.showerror("Acceso costoso", str(error))
+            return
+        messagebox.showinfo("Acceso costoso", self._texto_consulta(resultado))
+
 
     def actualizar_indicadores(self) -> None:
         modo = "estres" if self.catalogo.modo_estres else "normal"
