@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from enum import Enum
-from typing import Iterable
+from typing import Iterable, Optional
 
 
 class ErrorValidacion(ValueError):
@@ -112,6 +112,35 @@ class Reporte:
 
 
 @dataclass(frozen=True)
+class Asociacion:
+    """B's candidates and chosen reference, stored by event id (C2 / PDF section 7).
+
+    Never stores AVL node references: a rotation changes a node's parent/child
+    links without changing any earthquake's identity, so identities are what
+    must survive a rotation untouched.
+    """
+
+    candidatos: tuple[int, ...]
+    referencia_elegida: Optional[int]
+
+
+@dataclass
+class ResultadoConsulta:
+    """Uniform result envelope for every catalog query (C3 / PDF section 11).
+
+    `resultados` holds whatever shape is natural for that query (events for the
+    top-k/magnitude/depth queries, small dicts for the association and
+    expensive-access queries); `nodos_examinados` is the AVL visit count, which
+    must be reported even when it is 0 (an id-indexed lookup that never
+    touched the tree).
+    """
+
+    resultados: list
+    nodos_examinados: int
+    descripcion_costo: str
+
+
+@dataclass(frozen=True)
 class VistaNodo:
     """Immutable view of a tree node for GUI rendering."""
 
@@ -167,3 +196,25 @@ def calcular_prioridad(evento: Evento) -> int:
     if evento.magnitud >= Decimal("4.5"):
         return 2
     return 1
+
+
+def es_candidato(a: Evento, b: Evento, w_horas: Decimal, r_km: Decimal) -> bool:
+    """True when A is a reference candidate for B under the exact rule of PDF section 7.
+
+    A must have strictly greater magnitude, occur strictly before B, be within
+    W hours of B, and be within R km of B. Distance is compared squared to
+    avoid a sqrt call while keeping the <= R boundary exact.
+    """
+    if a.identificador == b.identificador:
+        return False
+    if not a.magnitud > b.magnitud:
+        return False
+    if not a.ocurrencia < b.ocurrencia:
+        return False
+    diferencia_horas = Decimal((b.ocurrencia - a.ocurrencia).total_seconds()) / Decimal(3600)
+    if diferencia_horas > w_horas:
+        return False
+    dx = a.x - b.x
+    dy = a.y - b.y
+    distancia_cuadrado = dx * dx + dy * dy
+    return distancia_cuadrado <= r_km * r_km
