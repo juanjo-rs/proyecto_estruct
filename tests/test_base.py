@@ -1,5 +1,6 @@
 import json
 from datetime import datetime, timezone
+from decimal import Decimal
 from unittest import TestCase
 from typing import assert_type
 
@@ -11,14 +12,23 @@ from src.dominio import EstadoAtencion, Evento, Reporte, Zona
 RELOJ = datetime(2026, 9, 7, 12, 0, tzinfo=timezone.utc)
 
 
-def evento(identificador: int, magnitud: float = 4.5, revision: int = 1, estacion: str = "EST-01", profundidad_hipocentro: float = 30.0) -> Evento:
+def evento(
+    identificador: int,
+    magnitud: float = 4.5,
+    revision: int = 1,
+    estacion: str = "EST-01",
+    profundidad_hipocentro: float = 30.0,
+    x: float = 100.0,
+    y: float = 100.0,
+    ocurrencia: str = "2026-09-07T10:00:00Z",
+) -> Evento:
     return Evento(
         identificador=identificador,
         magnitud=magnitud,
         profundidad_hipocentro=profundidad_hipocentro,
-        x=100.0,
-        y=100.0,
-        ocurrencia="2026-09-07T10:00:00Z",
+        x=x,
+        y=y,
+        ocurrencia=ocurrencia,
         revision=revision,
         estaciones={estacion},
     )
@@ -1024,4 +1034,296 @@ class PruebasBase(TestCase):
     def test_restaurar_version_inexistente_falla(self) -> None:
         with self.assertRaises(ValueError) as context:
             self.catalogo.restaurar_version("version_inexistente")
-        self.assertIn("no existe", str(context.exception).lower())     
+        self.assertIn("no existe", str(context.exception).lower())
+
+    # ------------------------------------------------------------------
+    # C1 - scenario: initial W/R/L/T, cambiar_parametro, station registry.
+    # ------------------------------------------------------------------
+
+    def test_parametros_iniciales_del_escenario(self) -> None:
+        self.assertEqual(self.catalogo.parametros["W"], Decimal("48"))
+        self.assertEqual(self.catalogo.parametros["R"], Decimal("40"))
+        self.assertEqual(self.catalogo.parametros["L"], 3)
+        self.assertEqual(self.catalogo.parametros["T"], Decimal("4320"))
+
+    def test_cambiar_parametro_valido_es_una_sola_accion_deshacible(self) -> None:
+        cantidad_antes = len(self.catalogo.historial)
+        self.catalogo.cambiar_parametro("W", 100)
+        self.assertEqual(self.catalogo.parametros["W"], Decimal("100"))
+        self.assertEqual(len(self.catalogo.historial), cantidad_antes + 1)
+        self.assertEqual(self.catalogo.deshacer(), "Deshecho: Cambiar parametro W")
+        self.assertEqual(self.catalogo.parametros["W"], Decimal("48"))
+
+    def test_cambiar_parametro_invalido_no_muta_ni_registra_instantanea(self) -> None:
+        cantidad_antes = len(self.catalogo.historial)
+        for nombre, valor in (("W", 0), ("R", -1), ("T", 0), ("L", -1), ("L", 2.5), ("Z", 5)):
+            with self.assertRaises(ValueError):
+                self.catalogo.cambiar_parametro(nombre, valor)
+        self.assertEqual(len(self.catalogo.historial), cantidad_antes)
+        self.assertEqual(self.catalogo.parametros["W"], Decimal("48"))
+
+    def test_estaciones_sin_configurar_es_permisivo(self) -> None:
+        # Default registry is empty: no station membership is enforced (risk 1
+        # in docs/ANALISIS_REQUISITOS_C1_C6_SAMUEL.md, to not break existing callers).
+        self.catalogo.crear_evento(evento(10, estacion="EST-CUALQUIERA"))
+        self.assertIn(10, self.catalogo.indice_activos)
+
+    def test_estacion_no_configurada_se_rechaza_cuando_hay_registro(self) -> None:
+        catalogo = CatalogoSismico(self.zonas, RELOJ, estaciones=["EST-01", "EST-02"])
+        with self.assertRaises(ValueError):
+            catalogo.crear_evento(evento(10, estacion="EST-FANTASMA"))
+        self.assertEqual(catalogo.indice_activos, {})
+        catalogo.crear_evento(evento(10, estacion="EST-01"))
+        self.assertIn(10, catalogo.indice_activos)
+
+    def test_configurar_estaciones_rechaza_vacias_y_duplicadas(self) -> None:
+        with self.assertRaises(ValueError):
+            self.catalogo.configurar_estaciones(["EST-01", ""])
+        with self.assertRaises(ValueError):
+            self.catalogo.configurar_estaciones(["EST-01", "EST-01"])
+        self.catalogo.configurar_estaciones(["EST-01", "EST-02"])
+        self.assertEqual(self.catalogo.estaciones, frozenset({"EST-01", "EST-02"}))
+
+    # ------------------------------------------------------------------
+    # C2 - associations (PDF section 7, policy A2).
+    # ------------------------------------------------------------------
+
+    def test_candidato_valido_se_asocia_como_referencia(self) -> None:
+        self.catalogo.crear_evento(evento(1, magnitud=6.5, x=100.0, y=100.0, ocurrencia="2026-09-07T09:00:00Z"))
+        self.catalogo.crear_evento(evento(2, magnitud=5.0, x=105.0, y=100.0, ocurrencia="2026-09-07T10:00:00Z"))
+        self.assertEqual(self.catalogo.asociaciones[2].candidatos, (1,))
+        self.assertEqual(self.catalogo.asociaciones[2].referencia_elegida, 1)
+        self.assertEqual(self.catalogo.asociaciones[1].candidatos, ())
+
+    def test_no_candidato_por_igual_magnitud(self) -> None:
+        # Same magnitude (not strictly greater) must not qualify, even if earlier.
+        self.catalogo.crear_evento(evento(1, magnitud=5.0, ocurrencia="2026-09-07T09:00:00Z"))
+        self.catalogo.crear_evento(evento(2, magnitud=5.0, ocurrencia="2026-09-07T10:00:00Z"))
+        self.assertEqual(self.catalogo.asociaciones[2].candidatos, ())
+
+    def test_no_candidato_fuera_de_distancia_r(self) -> None:
+        # Farther than R km must not qualify even with higher magnitude and earlier time.
+        self.catalogo.crear_evento(evento(3, magnitud=6.0, x=900.0, y=900.0, ocurrencia="2026-09-07T08:00:00Z"))
+        self.catalogo.crear_evento(evento(4, magnitud=4.0, x=100.0, y=100.0, ocurrencia="2026-09-07T11:00:00Z"))
+        self.assertEqual(self.catalogo.asociaciones[4].candidatos, ())
+
+    def test_limite_w_y_r_son_inclusivos(self) -> None:
+        # Exactly R km apart (40 km) and exactly W hours apart (48h) must still qualify.
+        self.catalogo.crear_evento(evento(1, magnitud=6.0, x=0.0, y=0.0, ocurrencia="2026-09-05T12:00:00Z"))
+        self.catalogo.crear_evento(evento(2, magnitud=4.0, x=40.0, y=0.0, ocurrencia="2026-09-07T12:00:00Z"))
+        self.assertEqual(self.catalogo.asociaciones[2].referencia_elegida, 1)
+
+    def test_politica_a2_desempate_magnitud_luego_tiempo_luego_id(self) -> None:
+        self.catalogo.crear_evento(evento(10, magnitud=5.2, ocurrencia="2026-09-07T11:00:00Z"))  # A1: closest, ties A3 on magnitude
+        self.catalogo.crear_evento(evento(20, magnitud=5.0, ocurrencia="2026-09-07T11:50:00Z"))  # A2: loses on magnitude
+        self.catalogo.crear_evento(evento(30, magnitud=5.2, ocurrencia="2026-09-07T10:00:00Z"))  # A3: ties A1 on magnitude, farther in time
+        self.catalogo.crear_evento(evento(99, magnitud=4.0, ocurrencia="2026-09-07T12:00:00Z"))
+        self.assertEqual(self.catalogo.asociaciones[99].referencia_elegida, 10)
+
+    def test_eliminado_no_es_candidato_pero_archivado_si(self) -> None:
+        self.catalogo.parametros["T"] = 60
+        self.catalogo.crear_evento(evento(1, magnitud=4.0, ocurrencia="2026-09-07T09:00:00Z"))
+        self.catalogo.archivar_rama()
+        self.catalogo.crear_evento(evento(2, magnitud=6.0, x=0.0, y=0.0, ocurrencia="2026-09-07T08:00:00Z"))
+        self.catalogo.crear_evento(evento(3, magnitud=4.0, x=0.0, y=0.0, ocurrencia="2026-09-07T10:00:00Z"))
+        self.assertEqual(self.catalogo.asociaciones[3].referencia_elegida, 2)
+        self.catalogo.eliminar_evento(2)
+        self.assertNotIn(2, self.catalogo.asociaciones[3].candidatos)
+
+    def test_rotacion_avl_no_cambia_asociaciones(self) -> None:
+        self.catalogo.crear_evento(evento(1, magnitud=6.5, x=100.0, y=100.0, ocurrencia="2026-09-07T09:00:00Z"))
+        self.catalogo.crear_evento(evento(2, magnitud=5.0, x=105.0, y=100.0, ocurrencia="2026-09-07T10:00:00Z"))
+        antes = self.catalogo.asociaciones[2].referencia_elegida
+        # Force rotations with unrelated low-priority, far-away events.
+        for identificador, magnitud in ((3, 1.0), (4, 1.0), (5, 1.0)):
+            self.catalogo.crear_evento(evento(identificador, magnitud=magnitud, x=900.0, y=900.0, ocurrencia="2026-09-07T08:00:00Z"))
+        self.assertGreaterEqual(self.catalogo.avl.giros_izquierda + self.catalogo.avl.giros_derecha, 1)
+        self.assertEqual(self.catalogo.asociaciones[2].referencia_elegida, antes)
+
+    def test_cambiar_w_o_r_recalcula_y_deshacer_restaura(self) -> None:
+        self.catalogo.crear_evento(evento(1, magnitud=6.5, x=100.0, y=100.0, ocurrencia="2026-09-07T09:00:00Z"))
+        self.catalogo.crear_evento(evento(2, magnitud=5.0, x=105.0, y=100.0, ocurrencia="2026-09-07T10:00:00Z"))
+        self.catalogo.cambiar_parametro("R", 1)
+        self.assertEqual(self.catalogo.asociaciones[2].candidatos, ())
+        self.catalogo.deshacer()
+        self.assertEqual(self.catalogo.asociaciones[2].referencia_elegida, 1)
+
+    def test_correccion_recalcula_asociaciones_afectadas(self) -> None:
+        self.catalogo.crear_evento(evento(1, magnitud=6.5, x=100.0, y=100.0, ocurrencia="2026-09-07T09:00:00Z"))
+        self.catalogo.crear_evento(evento(2, magnitud=5.0, x=105.0, y=100.0, ocurrencia="2026-09-07T10:00:00Z"))
+        self.assertEqual(self.catalogo.asociaciones[2].referencia_elegida, 1)
+        # Moving event 1 far away removes it as a candidate for event 2.
+        self.catalogo.corregir_evento(1, {"x": Decimal("900.0"), "y": Decimal("900.0")})
+        self.assertEqual(self.catalogo.asociaciones[2].candidatos, ())
+
+    # ------------------------------------------------------------------
+    # C3 - queries (PDF section 11): every query reports nodes examined.
+    # ------------------------------------------------------------------
+
+    def test_consultar_top_k_pendientes_orden_descendente_y_salta_revisados(self) -> None:
+        for identificador in (30, 20, 10, 40, 50):
+            self.catalogo.crear_evento(evento(identificador, magnitud=4.0))
+        self.catalogo.marcar_revisado(20)
+        resultado = self.catalogo.consultar_top_k_pendientes(2)
+        self.assertEqual([e.identificador for e in resultado.resultados], [50, 40])
+        self.assertGreaterEqual(resultado.nodos_examinados, 2)
+
+    def test_consultar_top_k_pendientes_rechaza_k_invalido(self) -> None:
+        for k in (0, -1, 2.5):
+            with self.assertRaises(ValueError):
+                self.catalogo.consultar_top_k_pendientes(k)
+
+    def test_consultar_por_magnitud_intervalo_inclusivo(self) -> None:
+        for identificador, magnitud in ((1, 4.5), (2, 6.0), (3, 6.1), (4, 4.4)):
+            self.catalogo.crear_evento(evento(identificador, magnitud=magnitud))
+        resultado = self.catalogo.consultar_por_magnitud(4.5, 6.0)
+        self.assertEqual(sorted(e.identificador for e in resultado.resultados), [1, 2])
+        self.assertEqual(resultado.nodos_examinados, 4)
+
+    def test_consultar_por_profundidad_y_fecha_limites_inclusivos(self) -> None:
+        self.catalogo.crear_evento(evento(1, profundidad_hipocentro=30.0, ocurrencia="2026-09-07T10:00:00Z"))
+        self.catalogo.crear_evento(evento(2, profundidad_hipocentro=31.0, ocurrencia="2026-09-07T10:00:00Z"))
+        resultado = self.catalogo.consultar_por_profundidad_y_fecha(
+            30.0, "2026-09-07T10:00:00Z", "2026-09-07T10:00:00Z"
+        )
+        self.assertEqual([e.identificador for e in resultado.resultados], [1])
+        with self.assertRaises(ValueError):
+            self.catalogo.consultar_por_profundidad_y_fecha(30.0, "2026-09-07T11:00:00Z", "2026-09-07T10:00:00Z")
+
+    def test_consultar_asociaciones_no_usa_el_avl(self) -> None:
+        self.catalogo.crear_evento(evento(1, magnitud=6.5, x=100.0, y=100.0, ocurrencia="2026-09-07T09:00:00Z"))
+        self.catalogo.crear_evento(evento(2, magnitud=5.0, x=105.0, y=100.0, ocurrencia="2026-09-07T10:00:00Z"))
+        resultado = self.catalogo.consultar_asociaciones(2)
+        self.assertEqual(resultado.nodos_examinados, 0)
+        datos = resultado.resultados[0]
+        self.assertEqual(datos["referencia_elegida"]["identificador"], 1)
+        self.assertEqual([c["identificador"] for c in datos["candidatos"]], [1])
+
+        resultado_inverso = self.catalogo.consultar_asociaciones(1)
+        self.assertEqual(
+            [r["identificador"] for r in resultado_inverso.resultados[0]["referenciado_por"]], [2]
+        )
+
+    def test_consultar_asociaciones_id_eliminado_no_participa(self) -> None:
+        self.catalogo.crear_evento(evento(1))
+        self.catalogo.eliminar_evento(1)
+        resultado = self.catalogo.consultar_asociaciones(1)
+        self.assertEqual(resultado.nodos_examinados, 0)
+        self.assertIn("mensaje", resultado.resultados[0])
+
+    def test_consultar_acceso_costoso_reporta_profundidad_y_busqueda(self) -> None:
+        self.catalogo.parametros["L"] = 0
+        for identificador in (10, 20, 30):
+            self.catalogo.crear_evento(evento(identificador))
+        resultado = self.catalogo.consultar_acceso_costoso()
+        self.assertEqual(sorted(r["identificador"] for r in resultado.resultados), [10, 30])
+        self.assertTrue(all(r["profundidad_nodo"] > 0 for r in resultado.resultados))
+        self.assertTrue(all(r["nodos_visitados_busqueda"] >= 1 for r in resultado.resultados))
+
+    # ------------------------------------------------------------------
+    # C4 - remaining section 6/9 gaps: full per-event lookup, archive metrics.
+    # ------------------------------------------------------------------
+
+    def test_consultar_detalle_evento_activo_incluye_posicion_avl_y_asociaciones(self) -> None:
+        for identificador in (30, 20, 10, 40, 50):
+            self.catalogo.crear_evento(evento(identificador, magnitud=4.0))
+        detalle = self.catalogo.consultar_detalle(20)
+        for campo in ("profundidad_nodo", "altura_nodo", "factor_balance", "acceso_costoso", "asociaciones", "clave"):
+            self.assertIn(campo, detalle)
+        self.assertEqual(detalle["estado"], "activo")
+
+    def test_consultar_detalle_desconocido_y_eliminado(self) -> None:
+        self.assertEqual(self.catalogo.consultar_detalle(99999)["estado"], "desconocido")
+        self.catalogo.crear_evento(evento(1))
+        self.catalogo.eliminar_evento(1)
+        detalle = self.catalogo.consultar_detalle(1)
+        self.assertEqual(detalle["estado"], "eliminado")
+        self.assertIn("mensaje", detalle)
+        self.assertNotIn("profundidad_nodo", detalle)
+
+    def test_archivar_rama_incrementa_metricas_c4(self) -> None:
+        self.catalogo.parametros["T"] = 60
+        for identificador in (10, 20, 30):
+            self.catalogo.crear_evento(evento(identificador, magnitud=4.0))
+        self.catalogo.archivar_rama()
+        self.assertEqual(self.catalogo.metricas["archivos_masivos"], 1)
+        self.assertEqual(self.catalogo.metricas["eventos_archivados"], 3)
+
+    # ------------------------------------------------------------------
+    # C5 - queue: conflict and archived-reactivation, explicit unit coverage
+    # (the full alta/confirmacion/antiguo/correccion flow already has a
+    # fixture-driven demo in tests/fixtures/rafagas_fifo.json and the Tk queue
+    # window in interfaz.py).
+    # ------------------------------------------------------------------
+
+    def test_reporte_conflicto_misma_revision_datos_distintos(self) -> None:
+        self.catalogo.crear_evento(evento(10, magnitud=4.5))
+        self.catalogo.encolar_reporte(Reporte(evento(10, magnitud=5.0, estacion="EST-02"), "EST-02"))
+        self.assertEqual(self.catalogo.procesar_siguiente_reporte(), "conflicto: misma revision con datos distintos")
+        self.assertEqual(str(self.catalogo.indice_activos[10].magnitud), "4.5")
+        self.assertEqual(self.catalogo.metricas["conflictos"], 1)
+
+    def test_reporte_con_revision_mayor_reactiva_evento_archivado(self) -> None:
+        self.catalogo.parametros["T"] = 60
+        self.catalogo.crear_evento(evento(10, magnitud=4.0))
+        self.catalogo.archivar_rama()
+        self.assertEqual(self.catalogo.consultar(10)[0], "archivado")
+        reporte = Reporte(evento(10, magnitud=4.2, revision=2, estacion="EST-02"), "EST-02")
+        self.catalogo.encolar_reporte(reporte)
+        self.assertEqual(self.catalogo.procesar_siguiente_reporte(), "reactivado desde historico")
+        self.assertEqual(self.catalogo.consultar(10)[0], "activo")
+        self.assertEqual(str(self.catalogo.indice_activos[10].magnitud), "4.2")
+
+    def test_reporte_antiguo_no_reactiva_evento_archivado(self) -> None:
+        self.catalogo.parametros["T"] = 60
+        self.catalogo.crear_evento(evento(10, magnitud=4.0, revision=2))
+        self.catalogo.archivar_rama()
+        reporte = Reporte(evento(10, magnitud=4.9, revision=1, estacion="EST-02"), "EST-02")
+        self.catalogo.encolar_reporte(reporte)
+        self.assertEqual(
+            self.catalogo.procesar_siguiente_reporte(), "descartado: reporte archivado no es una revision mayor"
+        )
+        self.assertEqual(self.catalogo.consultar(10)[0], "archivado")
+
+    # ------------------------------------------------------------------
+    # C6 - mandatory minimal cases 1-3 (PDF section 16).
+    # ------------------------------------------------------------------
+
+    def test_caso16_1_limites_de_prioridad_y_zona(self) -> None:
+        self.catalogo.crear_evento(evento(1, magnitud=4.5, profundidad_hipocentro=30.0, x=100, y=100))
+        self.assertEqual(self.catalogo.indice_activos[1].prioridad, 3)  # M=4.5, H=30.0, zona poblada
+        self.catalogo.crear_evento(evento(2, magnitud=4.5, profundidad_hipocentro=30.0, x=900, y=900))
+        self.assertEqual(self.catalogo.indice_activos[2].prioridad, 2)  # same M/H, outside the zone
+        self.catalogo.crear_evento(evento(3, magnitud=6.0, profundidad_hipocentro=700.0, x=900, y=900))
+        self.assertEqual(self.catalogo.indice_activos[3].prioridad, 3)  # M=6.0 alone is enough
+        self.catalogo.crear_evento(evento(4, magnitud=5.0, profundidad_hipocentro=30.0, x=500, y=100))  # on the zone border
+        self.assertTrue(self.catalogo.indice_activos[4].en_zona_poblada)
+        # Tie on priority and magnitude: id breaks the tie in the AVL order.
+        self.catalogo.crear_evento(evento(5, magnitud=4.5, profundidad_hipocentro=30.0, x=100, y=100))
+        claves = [e.clave() for e in self.catalogo.avl.inorden()]
+        self.assertEqual(claves, sorted(claves))
+
+    def test_caso16_2_correccion_y_reporte_antiguo_no_revierte(self) -> None:
+        self.catalogo.crear_evento(evento(1, magnitud=4.8, profundidad_hipocentro=70.0, revision=1))
+        self.assertEqual(self.catalogo.indice_activos[1].prioridad, 2)
+        self.catalogo.corregir_evento(1, {"magnitud": 6.2, "profundidad_hipocentro": 15.0})
+        self.assertEqual(self.catalogo.indice_activos[1].prioridad, 3)
+        self.catalogo.encolar_reporte(
+            Reporte(evento(1, magnitud=6.2, profundidad_hipocentro=15.0, revision=1, estacion="EST-02"), "EST-02")
+        )
+        self.assertEqual(self.catalogo.procesar_siguiente_reporte(), "descartado: reporte antiguo")
+        self.assertEqual(str(self.catalogo.indice_activos[1].magnitud), "6.2")
+        self.assertEqual(sum(1 for e in self.catalogo.avl.inorden() if e.identificador == 1), 1)
+
+    def test_caso16_3_reporte_tardio_cambia_candidatos(self) -> None:
+        self.catalogo.crear_evento(evento(1, magnitud=5.6, x=100, y=100, ocurrencia="2026-09-07T10:00:00Z"))
+        self.catalogo.crear_evento(evento(2, magnitud=4.2, x=100, y=100, ocurrencia="2026-09-07T10:20:00Z"))
+        # Before the late report: event 1 (bigger, earlier) is already event 2's reference.
+        self.assertEqual(self.catalogo.asociaciones[1].candidatos, ())
+        self.assertEqual(self.catalogo.asociaciones[2].referencia_elegida, 1)
+        # Late report: a bigger quake that actually happened even earlier arrives last,
+        # and must displace event 1 as the chosen reference for both.
+        self.catalogo.crear_evento(evento(3, magnitud=6.1, x=100, y=100, ocurrencia="2026-09-07T09:55:00Z"))
+        self.assertEqual(self.catalogo.asociaciones[1].referencia_elegida, 3)
+        self.assertEqual(self.catalogo.asociaciones[2].referencia_elegida, 3)
+        self.assertIn(3, self.catalogo.asociaciones[2].candidatos)
