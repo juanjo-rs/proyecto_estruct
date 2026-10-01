@@ -7,7 +7,7 @@ import os
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Iterable, Optional
 
@@ -17,15 +17,19 @@ from .arbol_avl import ArbolAVL
 from .arbol_bst import ArbolBST
 from .cola import Cola
 from .dominio import (
+    Asociacion,
     EstadoAtencion,
     Evento,
     Reporte,
+    ResultadoConsulta,
     VistaEventoMapa,
     VistaNodo,
     VistaZona,
     Zona,
     calcular_prioridad,
     clasificar_zona_poblada,
+    decimal_un_lugar,
+    es_candidato,
     fecha_utc,
 )
 from .pila import Pila
@@ -100,7 +104,12 @@ class RamaArchivable:
 class CatalogoSismico:
     """Application service for the first implementation increment."""
 
-    def __init__(self, zonas: Iterable[Zona], reloj: datetime | str) -> None:
+    def __init__(
+        self,
+        zonas: Iterable[Zona],
+        reloj: datetime | str,
+        estaciones: Iterable[str] = (),
+    ) -> None:
         self.zonas = list(zonas)
         self.reloj = fecha_utc(reloj)
         self.avl = ArbolAVL()
@@ -110,8 +119,26 @@ class CatalogoSismico:
         self.eliminados: set[int] = set()
         self.reportes_pendientes: Cola[Reporte] = Cola()
         self.historial: Pila[InstantaneaCatalogo] = Pila()
-        self.parametros: dict[str, object] = {}
-        self.asociaciones: dict[object, object] = {}
+        # C1: W/R/L/T start at the mandatory initial values (PDF section 3/6/9/10),
+        # not empty. Kept as a plain mutable dict on purpose: internal reconstruction
+        # paths (cargar_por_*, restaurar_version) and existing tests still assign it
+        # directly; cambiar_parametro() is the validated, undoable, association-aware
+        # entry point meant for the GUI and for any new report/business flow.
+        self.parametros: dict[str, object] = {
+            "W": Decimal("48"),
+            "R": Decimal("40"),
+            "L": 3,
+            "T": Decimal("4320"),  # minutes; matches archivar_rama's minute-based math
+        }
+        # C2: forward map only (B's candidates and chosen reference, by id).
+        # The inverse ("who references A") is derived on demand in _referenciados_por
+        # instead of being kept as a second live structure, per PDF section 12: the
+        # team may persist associations or rebuild them from the deterministic policy.
+        self.asociaciones: dict[int, Asociacion] = {}
+        # C1: immutable station registry. Empty means "not configured" (permissive):
+        # no station-membership check is enforced, so existing call sites and tests
+        # that never configured stations keep working unchanged.
+        self.estaciones: frozenset[str] = self._validar_estaciones(estaciones)
         self.modo_estres = False
         self.cola_pausada = False
         self.metricas = {
@@ -119,7 +146,53 @@ class CatalogoSismico:
             "reportes_descartados": 0,
             "conflictos": 0,
             "eliminaciones": 0,
+            "archivos_masivos": 0,
+            "eventos_archivados": 0,
         }
+
+    @staticmethod
+    def _validar_estaciones(estaciones: Iterable[str]) -> frozenset[str]:
+        """Validate station codes: non-empty text, no duplicates (TUTORIA C1 step 2)."""
+        codigos = [codigo.strip() for codigo in estaciones]
+        if any(not codigo for codigo in codigos):
+            raise ValueError("Los codigos de estacion no pueden ser vacios.")
+        if len(codigos) != len(set(codigos)):
+            raise ValueError("No se puede repetir un codigo de estacion.")
+        return frozenset(codigos)
+
+    def configurar_estaciones(self, estaciones: Iterable[str]) -> None:
+        """Replace the station registry. Call only during scenario setup/load, not
+        mid-session: stations are meant to stay fixed while the scenario runs
+        (PDF section 3), so this is not registered as an undoable action."""
+        self.estaciones = self._validar_estaciones(estaciones)
+
+    def cambiar_parametro(self, nombre: str, valor: object) -> object:
+        """Validate, apply, and (for W/R) recompute associations as ONE undoable
+        action (C1 / PDF sections 6-7-9-10). Order follows TUTORIA C1 step 3:
+        validate fully first, take exactly one snapshot, then mutate.
+        """
+        if nombre not in ("W", "R", "L", "T"):
+            raise ValueError(f"Parametro desconocido: {nombre}.")
+        if nombre == "L":
+            if not isinstance(valor, int) or isinstance(valor, bool) or valor < 0:
+                raise ValueError("L debe ser un entero mayor o igual a 0.")
+            nuevo: object = valor
+        else:
+            try:
+                decimal_valor = Decimal(str(valor))
+            except (InvalidOperation, ValueError) as error:
+                raise ValueError(f"{nombre} debe ser un numero decimal valido.") from error
+            if not decimal_valor.is_finite() or decimal_valor <= 0:
+                raise ValueError(f"{nombre} debe ser un numero positivo.")
+            nuevo = decimal_valor
+        self._registrar_instantanea(f"Cambiar parametro {nombre}")
+        self.parametros[nombre] = nuevo
+        if nombre in ("W", "R"):
+            # Only W/R redefine what a candidate is; L and T have no effect on
+            # associations (L only affects the expensive-access mark, T only
+            # affects future archive eligibility) per TUTORIA C1 step 3 table.
+            self.recalcular_asociaciones()
+        return nuevo
 
     def activar_modo_estres(self) -> bool:
         if self.modo_estres:
@@ -143,6 +216,12 @@ class CatalogoSismico:
 
     def _normalizar_y_clasificar(self, evento: Evento) -> None:
         evento.validar(self.reloj)
+        # C1: only enforced once a station registry was configured (permissive by
+        # default); a single choke point covers crear_evento, corregir_evento and
+        # procesar_siguiente_reporte, which all route through this method.
+        if self.estaciones and not evento.estaciones <= self.estaciones:
+            desconocidas = sorted(evento.estaciones - self.estaciones)
+            raise ValueError(f"Estacion(es) no configurada(s) en el escenario: {desconocidas}.")
         evento.en_zona_poblada = clasificar_zona_poblada(evento, self.zonas)
         evento.prioridad = calcular_prioridad(evento)
 
@@ -194,6 +273,46 @@ class CatalogoSismico:
         }
 
 
+    def recalcular_asociaciones(self) -> None:
+        """Rebuild every association from scratch (C2 / PDF section 7).
+
+        O(n^2): each active-or-archived event is compared against every other
+        one. Correct and simple for this project's scale (GUIA_IMPLEMENTACION
+        section 6, decision 2); callers never take their own snapshot here, so
+        this must only be invoked from inside an action that already registered
+        exactly one instantanea (crear_evento, corregir_evento, eliminar_evento,
+        cambiar_parametro for W/R) or right after an atomic scenario load.
+
+        Never call this for a rotation, a plain archive, or a change of L/T/reloj:
+        none of those redefine what a candidate is (PDF section 7, TUTORIA 3.7).
+        """
+        eventos = list(self.indice_activos.values()) + list(self.archivados.values())
+        w_horas = Decimal(str(self.parametros.get("W", 0)))
+        r_km = Decimal(str(self.parametros.get("R", 0)))
+        nuevas: dict[int, Asociacion] = {}
+        for b in eventos:
+            candidatos = [a for a in eventos if es_candidato(a, b, w_horas, r_km)]
+            # Deterministic policy A2: greater magnitude first, then closer in time
+            # to B, then smaller id. Never depends on arrival order or AVL shape.
+            candidatos.sort(key=lambda a: (-a.magnitud, b.ocurrencia - a.ocurrencia, a.identificador))
+            referencia = candidatos[0].identificador if candidatos else None
+            nuevas[b.identificador] = Asociacion(
+                candidatos=tuple(a.identificador for a in candidatos),
+                referencia_elegida=referencia,
+            )
+        self.asociaciones = nuevas
+
+    def _referenciados_por(self, identificador: int) -> tuple[int, ...]:
+        """Events that chose `identificador` as their reference. Derived on demand
+        (O(n) scan) instead of kept as a second live structure, per PDF section 12."""
+        return tuple(
+            sorted(
+                eid
+                for eid, asociacion in self.asociaciones.items()
+                if asociacion.referencia_elegida == identificador
+            )
+        )
+
     def crear_evento(self, evento: Evento, registrar_accion: bool = True) -> Evento:
         """Create one active event after all validation succeeds."""
         if evento.identificador in self.indice_activos or evento.identificador in self.archivados:
@@ -206,6 +325,8 @@ class CatalogoSismico:
         self.avl.insertar(evento, balancear=not self.modo_estres)
         self.bst.insertar(evento)
         self.indice_activos[evento.identificador] = evento
+        # C2: a new event may be a candidate for others or have candidates itself.
+        self.recalcular_asociaciones()
         return evento
 
     def consultar(self, identificador: int) -> tuple[str, Optional[Evento]]:
@@ -258,6 +379,9 @@ class CatalogoSismico:
             self.bst.insertar(evento)
 
         self.metricas["correcciones_aceptadas"] += 1
+        # C2: unconditional, even when the key did not change — x/y/ocurrencia can
+        # move the W/R candidacy window without touching priority or magnitude.
+        self.recalcular_asociaciones()
         return evento
 
     def marcar_revisado(self, identificador: int) -> Evento:
@@ -278,6 +402,8 @@ class CatalogoSismico:
         del self.indice_activos[identificador]
         self.eliminados.add(identificador)
         self.metricas["eliminaciones"] += 1
+        # C2: drop associations that used this id as a candidate/reference.
+        self.recalcular_asociaciones()
         return retirado
 
     def _evento_cumple_archivo(self, evento: Evento, umbral_t: float) -> bool:
@@ -337,6 +463,10 @@ class CatalogoSismico:
             self.avl.eliminar(clave, balancear=not self.modo_estres)
             del self.indice_activos[identificador]
             self.archivados[identificador] = evento
+        # C4: a simple archive does not change associations (PDF section 7), only
+        # its own counters (archived events stay valid candidates/references).
+        self.metricas["archivos_masivos"] += 1
+        self.metricas["eventos_archivados"] += len(ids_fijos)
         return ganadora
 
 
@@ -413,6 +543,233 @@ class CatalogoSismico:
             raise ValueError("El reloj de simulacion no puede retroceder.")
         self._registrar_instantanea("Avanzar reloj de simulacion")
         self.reloj = nuevo
+
+    # ------------------------------------------------------------------
+    # C3: queries over the active AVL (PDF section 11). Every method here is
+    # read-only (never rotates, never mutates `self.avl`) and returns a
+    # ResultadoConsulta reporting exactly how many AVL nodes it visited.
+    # ------------------------------------------------------------------
+
+    def consultar_top_k_pendientes(self, k: int) -> ResultadoConsulta:
+        """First k active PENDIENTE events in descending key order.
+
+        Reverse-inorder traversal (right, node, left) with an explicit stack so
+        it stops the instant k results are collected; a reviewed event is still
+        visited and counted, just not collected. Best case O(h + k), worst case
+        O(n) when most nodes are reviewed or there are fewer than k pending.
+        """
+        if not isinstance(k, int) or isinstance(k, bool) or k <= 0:
+            raise ValueError("k debe ser un entero positivo.")
+        resultados: list[Evento] = []
+        examinados = 0
+        pila: list[NodoArbol] = []
+        actual = self.avl.raiz
+        while (actual is not None or pila) and len(resultados) < k:
+            while actual is not None:
+                pila.append(actual)
+                actual = actual.derecha
+            actual = pila.pop()
+            examinados += 1
+            if actual.evento.estado == EstadoAtencion.PENDIENTE:
+                resultados.append(actual.evento)
+            actual = actual.izquierda
+        return ResultadoConsulta(
+            resultados=resultados,
+            nodos_examinados=examinados,
+            descripcion_costo="O(h + k) mejor caso; O(n) peor caso (revisados en el camino).",
+        )
+
+    def _recorrer_avl_completo(self) -> list[NodoArbol]:
+        """Full traversal helper for queries that cannot prune by K (TUTORIA 4.3/4.4):
+        magnitude is not the first key component, so no subtree can be discarded
+        from magnitude alone, and depth/date are not part of K at all."""
+        nodos: list[NodoArbol] = []
+
+        def recorrer(nodo: Optional[NodoArbol]) -> None:
+            if nodo is None:
+                return
+            nodos.append(nodo)
+            recorrer(nodo.izquierda)
+            recorrer(nodo.derecha)
+
+        recorrer(self.avl.raiz)
+        return nodos
+
+    def consultar_por_magnitud(self, min_magnitud: object, max_magnitud: object) -> ResultadoConsulta:
+        """Active events with min_magnitud <= M <= max_magnitud (both inclusive).
+
+        Full traversal: magnitude is K's second component, so a node's priority
+        alone cannot justify discarding a whole subtree. O(n), n nodes examined.
+        """
+        minimo = decimal_un_lugar(min_magnitud, "-2.0", "10.0", "La magnitud minima")
+        maximo = decimal_un_lugar(max_magnitud, "-2.0", "10.0", "La magnitud maxima")
+        if minimo > maximo:
+            raise ValueError("La magnitud minima no puede ser mayor que la maxima.")
+        nodos = self._recorrer_avl_completo()
+        resultados = [n.evento for n in nodos if minimo <= n.evento.magnitud <= maximo]
+        return ResultadoConsulta(
+            resultados=resultados,
+            nodos_examinados=len(nodos),
+            descripcion_costo="O(n): magnitud no es el primer componente de K, no se puede podar por prioridad.",
+        )
+
+    def consultar_por_profundidad_y_fecha(
+        self, limite_h: object, fecha_inicio: datetime | str, fecha_fin: datetime | str
+    ) -> ResultadoConsulta:
+        """Active events with hypocenter depth H <= limite_h and ocurrencia inside
+        [fecha_inicio, fecha_fin] (both inclusive). H and the date are not part of
+        K, so no subtree can be discarded: O(n), n nodes examined."""
+        limite = decimal_un_lugar(limite_h, "0.0", "700.0", "El limite de profundidad")
+        inicio = fecha_utc(fecha_inicio)
+        fin = fecha_utc(fecha_fin)
+        if inicio > fin:
+            raise ValueError("La fecha de inicio no puede ser posterior a la fecha de fin.")
+        nodos = self._recorrer_avl_completo()
+        resultados = [
+            n.evento
+            for n in nodos
+            if n.evento.profundidad_hipocentro <= limite and inicio <= n.evento.ocurrencia <= fin
+        ]
+        return ResultadoConsulta(
+            resultados=resultados,
+            nodos_examinados=len(nodos),
+            descripcion_costo="O(n): profundidad y fecha no son parte de K, no se puede podar.",
+        )
+
+    def consultar_asociaciones(self, identificador: int) -> ResultadoConsulta:
+        """Candidates, chosen reference, and reverse references for one event
+        (C2 data read through C3's query contract). Resolved entirely through
+        id-indexed structures, never through the AVL: nodos_examinados is 0.
+        """
+        estado, _ = self.consultar(identificador)
+        if estado == "desconocido":
+            raise KeyError(f"No existe el identificador {identificador}.")
+        if estado == "eliminado":
+            return ResultadoConsulta(
+                resultados=[{"identificador": identificador, "mensaje": "Eliminado: no participa en asociaciones."}],
+                nodos_examinados=0,
+                descripcion_costo="O(1): resuelto por indice, no requiere el AVL.",
+            )
+
+        def estado_de(eid: int) -> str:
+            return self.consultar(eid)[0]
+
+        asociacion = self.asociaciones.get(identificador, Asociacion(candidatos=(), referencia_elegida=None))
+        referenciado_por = self._referenciados_por(identificador)
+        resultado = {
+            "identificador": identificador,
+            "estado": estado,
+            "candidatos": [{"identificador": c, "estado": estado_de(c)} for c in asociacion.candidatos],
+            "referencia_elegida": (
+                {"identificador": asociacion.referencia_elegida, "estado": estado_de(asociacion.referencia_elegida)}
+                if asociacion.referencia_elegida is not None
+                else None
+            ),
+            "referenciado_por": [{"identificador": r, "estado": estado_de(r)} for r in referenciado_por],
+        }
+        return ResultadoConsulta(
+            resultados=[resultado],
+            nodos_examinados=0,
+            descripcion_costo="O(c + r): c candidatos mostrados y r referencias inversas, via indices por id.",
+        )
+
+    def consultar_acceso_costoso(self) -> ResultadoConsulta:
+        """Active, priority-3 events whose AVL depth is strictly greater than L,
+        each with node depth, L, and the simulated key-search cost (TUTORIA 4.6).
+
+        Full traversal (O(n)) plus one buscar_clave per match (O(m log n) for m
+        matches): the expensive-access mark is not part of K, so it cannot be
+        found by pruning. Mirrors indicadores()['acceso_costoso'] but returns the
+        richer, self-contained shape this specific C3 query must report.
+        """
+        limite = self.parametros.get("L")
+        if not (isinstance(limite, int) and not isinstance(limite, bool) and limite >= 0):
+            raise ValueError("El parametro L no esta definido o es invalido.")
+        resultados: list[dict[str, int]] = []
+        examinados = 0
+        for nodo, profundidad in self.avl.nodos_con_profundidad():
+            examinados += 1
+            if nodo.evento.prioridad == 3 and profundidad > limite:
+                _, visitas = self.avl.buscar_clave(nodo.evento.clave())
+                examinados += visitas
+                resultados.append(
+                    {
+                        "identificador": nodo.evento.identificador,
+                        "profundidad_nodo": profundidad,
+                        "limite": limite,
+                        "nodos_visitados_busqueda": visitas,
+                    }
+                )
+        return ResultadoConsulta(
+            resultados=resultados,
+            nodos_examinados=examinados,
+            descripcion_costo="O(n) recorrido completo + O(m log n) busquedas por clave de m resultados.",
+        )
+
+    # ------------------------------------------------------------------
+    # C4: remaining PDF section 6/9 gaps (full per-event lookup; the expensive
+    # access mark and archived-reactivation already exist in crear_evento's and
+    # procesar_siguiente_reporte's flows, see docs/ANALISIS_REQUISITOS_C1_C6_SAMUEL.md).
+    # ------------------------------------------------------------------
+
+    def _posicion_en_avl(self, clave: Clave) -> tuple[int, int, int]:
+        """Read-only walk to one key's node depth, stored height, and balance
+        factor. Never rotates; raises if the key is not in the active AVL."""
+        nodo = self.avl.raiz
+        profundidad = 0
+        while nodo is not None:
+            if clave == nodo.evento.clave():
+                return profundidad, nodo.altura, ArbolAVL._factor(nodo)
+            nodo = nodo.izquierda if clave < nodo.evento.clave() else nodo.derecha
+            profundidad += 1
+        raise KeyError("La clave no esta en el AVL activo.")
+
+    def consultar_detalle(self, identificador: int) -> dict:
+        """Full per-event lookup required by PDF section 6 ('Consulta de un
+        evento'): status, vigente data, AVL position (depth/height/factor) for
+        active events, expensive-access mark, and associations. Read-only: never
+        registers an instantanea and never mutates the AVL.
+        """
+        estado, evento = self.consultar(identificador)
+        detalle: dict[str, object] = {"identificador": identificador, "estado": estado}
+        if estado == "desconocido":
+            return detalle
+        if estado == "eliminado":
+            detalle["mensaje"] = "Identificador eliminado: no puede reactivarse ni mostrar datos vigentes."
+            return detalle
+
+        assert evento is not None
+        detalle.update(
+            {
+                "magnitud": evento.magnitud,
+                "profundidad_hipocentro": evento.profundidad_hipocentro,
+                "x": evento.x,
+                "y": evento.y,
+                "ocurrencia": evento.ocurrencia,
+                "revision": evento.revision,
+                "estaciones": sorted(evento.estaciones),
+                "en_zona_poblada": evento.en_zona_poblada,
+                "prioridad": evento.prioridad,
+                "clave": evento.clave(),
+                "estado_atencion": evento.estado.value,
+            }
+        )
+        if estado == "activo":
+            profundidad_nodo, altura, factor = self._posicion_en_avl(evento.clave())
+            limite = self.parametros.get("L")
+            limite_valido = isinstance(limite, int) and not isinstance(limite, bool) and limite >= 0
+            detalle.update(
+                {
+                    "profundidad_nodo": profundidad_nodo,
+                    "altura_nodo": altura,
+                    "factor_balance": factor,
+                    "acceso_costoso": bool(
+                        limite_valido and evento.prioridad == 3 and profundidad_nodo > limite
+                    ),
+                }
+            )
+        detalle["asociaciones"] = self.consultar_asociaciones(identificador).resultados[0]
+        return detalle
 
     def obtener_vista_arbol(self, tipo: str) -> tuple[dict[int, VistaNodo], Optional[int]]:
         """
@@ -586,6 +943,9 @@ class CatalogoSismico:
         self.bst = bst_temp
         self.indice_activos = indice_temp
         self.modo_estres = (modo == "estres")
+        # C2: this load schema carries no "asociaciones" field (CONTRATO section 2),
+        # so associations must be computed fresh for the freshly-loaded scenario.
+        self.recalcular_asociaciones()
 
         # Return statistics
         return {
@@ -846,6 +1206,8 @@ class CatalogoSismico:
         self.bst = bst_temp
         self.indice_activos = indice_temp
         self.modo_estres = (modo == "estres")
+        # C2: the topology load schema also carries no "asociaciones" field.
+        self.recalcular_asociaciones()
 
         # Return statistics
         return {
@@ -1029,8 +1391,15 @@ class CatalogoSismico:
         # Reconstruct metrics
         self.metricas = datos["metricas"].copy()
 
-        # Reconstruct associations
-        self.asociaciones = datos["asociaciones"].copy()
+        # Reconstruct associations (C2): rebuild Asociacion objects from the
+        # plain {candidatos, referencia_elegida} shape exportar_escenario_completo wrote.
+        self.asociaciones = {
+            int(eid): Asociacion(
+                candidatos=tuple(dato["candidatos"]),
+                referencia_elegida=dato["referencia_elegida"],
+            )
+            for eid, dato in datos["asociaciones"].items()
+        }
 
         # Atomically replace scenario
         self.zonas = zonas
@@ -1074,6 +1443,12 @@ class CatalogoSismico:
                 "estacion": reporte.estacion,
             }
 
+        def serializar_parametro(valor: object) -> Optional[float]:
+            """W/R/T are Decimal once set via cambiar_parametro or the C1 defaults;
+            json.dump cannot serialize Decimal directly, so convert here same as
+            every other physical quantity in this method. L stays an int/None."""
+            return float(valor) if valor is not None else None
+
         # Collect all unique stations from active, archived events, and pending reports
         todas_estaciones = set()
         for evento in self.indice_activos.values():
@@ -1091,10 +1466,10 @@ class CatalogoSismico:
             "modo": "estres" if self.modo_estres else "normal",
             "cola_pausada": self.cola_pausada,
             "parametros": {
-                "W": self.parametros.get("W"),
-                "R": self.parametros.get("R"),
+                "W": serializar_parametro(self.parametros.get("W")),
+                "R": serializar_parametro(self.parametros.get("R")),
                 "L": self.parametros.get("L"),
-                "T": self.parametros.get("T"),
+                "T": serializar_parametro(self.parametros.get("T")),
             },
             "zonas": [serializar_zona(zona) for zona in self.zonas],
             "estaciones": sorted(list(todas_estaciones)),
@@ -1108,7 +1483,15 @@ class CatalogoSismico:
             "estado_atencion": {
                 eid: evt.estado.value for eid, evt in self.indice_activos.items()
             },
-            "asociaciones": self.asociaciones.copy(),
+            # C2: Asociacion is a dataclass, not JSON-native; serialize it to the
+            # plain {candidatos, referencia_elegida} shape restaurar_version expects.
+            "asociaciones": {
+                str(eid): {
+                    "candidatos": list(asociacion.candidatos),
+                    "referencia_elegida": asociacion.referencia_elegida,
+                }
+                for eid, asociacion in self.asociaciones.items()
+            },
         }
 
 
