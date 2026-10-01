@@ -1084,6 +1084,12 @@ class PruebasBase(TestCase):
         self.catalogo.configurar_estaciones(["EST-01", "EST-02"])
         self.assertEqual(self.catalogo.estaciones, frozenset({"EST-01", "EST-02"}))
 
+    def test_deshacer_restaura_el_registro_de_estaciones(self) -> None:
+        self.catalogo.configurar_estaciones(["EST-01"])
+        self.catalogo.configurar_estaciones(["EST-02", "EST-03"])
+        self.catalogo.deshacer()
+        self.assertEqual(self.catalogo.estaciones, frozenset({"EST-01"}))
+
     # ------------------------------------------------------------------
     # C2 - associations (PDF section 7, policy A2).
     # ------------------------------------------------------------------
@@ -1239,7 +1245,29 @@ class PruebasBase(TestCase):
         detalle = self.catalogo.consultar_detalle(1)
         self.assertEqual(detalle["estado"], "eliminado")
         self.assertIn("mensaje", detalle)
+        self.assertEqual(detalle["magnitud"], Decimal("4.5"))
         self.assertNotIn("profundidad_nodo", detalle)
+        self.catalogo.deshacer()
+        self.assertNotIn(1, self.catalogo.cuerpos_eliminados)
+        self.assertEqual(self.catalogo.consultar(1)[0], "activo")
+
+    def test_version_restaura_estaciones_y_cuerpo_eliminado(self) -> None:
+        from pathlib import Path
+
+        self.catalogo.configurar_estaciones(["EST-01"])
+        self.catalogo.crear_evento(evento(8, magnitud=4.0))
+        self.catalogo.eliminar_evento(8)
+        try:
+            self.catalogo.guardar_version("test_registro_eliminados")
+            self.catalogo.configurar_estaciones(["EST-09"])
+            self.catalogo.restaurar_version("test_registro_eliminados")
+            self.assertEqual(self.catalogo.estaciones, frozenset({"EST-01"}))
+            estado, cuerpo = self.catalogo.consultar(8)
+            self.assertEqual(estado, "eliminado")
+            self.assertIsNotNone(cuerpo)
+            self.assertEqual(cuerpo.magnitud, Decimal("4.0"))
+        finally:
+            Path("versiones/test_registro_eliminados.json").unlink(missing_ok=True)
 
     def test_archivar_rama_incrementa_metricas_c4(self) -> None:
         self.catalogo.parametros["T"] = 60

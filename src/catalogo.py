@@ -48,11 +48,13 @@ class InstantaneaCatalogo:
     indice_activos: dict[int, Evento]
     archivados: dict[int, Evento]
     eliminados: set[int]
+    cuerpos_eliminados: dict[int, Evento]
     reportes_pendientes: Cola[Reporte]
     parametros: dict[str, object]
     modo_estres: bool
     cola_pausada: bool
     asociaciones: dict[object, object]
+    estaciones: frozenset[str]
     metricas: dict[str, int]
 
     @classmethod
@@ -66,11 +68,13 @@ class InstantaneaCatalogo:
                 "indice_activos": catalogo.indice_activos,
                 "archivados": catalogo.archivados,
                 "eliminados": catalogo.eliminados,
+                "cuerpos_eliminados": catalogo.cuerpos_eliminados,
                 "reportes_pendientes": catalogo.reportes_pendientes,
                 "parametros": catalogo.parametros,
                 "modo_estres": catalogo.modo_estres,
                 "cola_pausada": catalogo.cola_pausada,
                 "asociaciones": catalogo.asociaciones,
+                "estaciones": catalogo.estaciones,
                 "metricas": catalogo.metricas,
             }
         )
@@ -84,11 +88,13 @@ class InstantaneaCatalogo:
         catalogo.indice_activos = self.indice_activos
         catalogo.archivados = self.archivados
         catalogo.eliminados = self.eliminados
+        catalogo.cuerpos_eliminados = self.cuerpos_eliminados
         catalogo.reportes_pendientes = self.reportes_pendientes
         catalogo.parametros = self.parametros
         catalogo.modo_estres = self.modo_estres
         catalogo.cola_pausada = self.cola_pausada
         catalogo.asociaciones = self.asociaciones
+        catalogo.estaciones = self.estaciones
         catalogo.metricas = self.metricas
 
 @dataclass(frozen=True)
@@ -117,6 +123,7 @@ class CatalogoSismico:
         self.indice_activos: dict[int, Evento] = {}
         self.archivados: dict[int, Evento] = {}
         self.eliminados: set[int] = set()
+        self.cuerpos_eliminados: dict[int, Evento] = {}
         self.reportes_pendientes: Cola[Reporte] = Cola()
         self.historial: Pila[InstantaneaCatalogo] = Pila()
         # C1: W/R/L/T start at the mandatory initial values (PDF section 3/6/9/10),
@@ -161,10 +168,14 @@ class CatalogoSismico:
         return frozenset(codigos)
 
     def configurar_estaciones(self, estaciones: Iterable[str]) -> None:
-        """Replace the station registry. Call only during scenario setup/load, not
-        mid-session: stations are meant to stay fixed while the scenario runs
-        (PDF section 3), so this is not registered as an undoable action."""
-        self.estaciones = self._validar_estaciones(estaciones)
+        """Replace the station registry as one undoable action.
+
+        Stations stay fixed while the scenario runs, but undo and version
+        restore must bring the previous registry back with the rest of the scenario.
+        """
+        codigos = self._validar_estaciones(estaciones)
+        self._registrar_instantanea("Configurar estaciones")
+        self.estaciones = codigos
 
     def cambiar_parametro(self, nombre: str, valor: object) -> object:
         """Validate, apply, and (for W/R) recompute associations as ONE undoable
@@ -335,7 +346,7 @@ class CatalogoSismico:
         if identificador in self.archivados:
             return "archivado", self.archivados[identificador]
         if identificador in self.eliminados:
-            return "eliminado", None
+            return "eliminado", self.cuerpos_eliminados.get(identificador)
         return "desconocido", None
 
     def corregir_evento(
@@ -401,6 +412,7 @@ class CatalogoSismico:
         retirado = self.avl.eliminar(evento.clave(), balancear=not self.modo_estres)
         del self.indice_activos[identificador]
         self.eliminados.add(identificador)
+        self.cuerpos_eliminados[identificador] = deepcopy(evento)
         self.metricas["eliminaciones"] += 1
         # C2: drop associations that used this id as a candidate/reference.
         self.recalcular_asociaciones()
@@ -735,7 +747,23 @@ class CatalogoSismico:
         if estado == "desconocido":
             return detalle
         if estado == "eliminado":
-            detalle["mensaje"] = "Identificador eliminado: no puede reactivarse ni mostrar datos vigentes."
+            detalle["mensaje"] = "Identificador eliminado: no puede reactivarse ni sigue en el AVL."
+            if evento is not None:
+                detalle.update(
+                    {
+                        "magnitud": evento.magnitud,
+                        "profundidad_hipocentro": evento.profundidad_hipocentro,
+                        "x": evento.x,
+                        "y": evento.y,
+                        "ocurrencia": evento.ocurrencia,
+                        "revision": evento.revision,
+                        "estaciones": sorted(evento.estaciones),
+                        "en_zona_poblada": evento.en_zona_poblada,
+                        "prioridad": evento.prioridad,
+                        "clave": evento.clave(),
+                        "estado_atencion": evento.estado.value,
+                    }
+                )
             return detalle
 
         assert evento is not None
@@ -1366,8 +1394,25 @@ class CatalogoSismico:
             evento.prioridad = evento_json["prioridad"]
             archivados_temp[eid_int] = evento
 
-        # Reconstruct deleted IDs
+        # Reconstruct deleted IDs and the saved body of each deleted event.
         eliminados_temp = set(int(eid) if isinstance(eid, str) else eid for eid in datos["ids_eliminados"])
+        cuerpos_temp: dict[int, Evento] = {}
+        for eid, evento_json in datos.get("eventos_eliminados", {}).items():
+            eid_int = int(eid) if isinstance(eid, str) else eid
+            cuerpo = Evento(
+                identificador=evento_json["identificador"],
+                magnitud=Decimal(str(evento_json["magnitud"])),
+                profundidad_hipocentro=Decimal(str(evento_json["profundidad_hipocentro"])),
+                x=Decimal(str(evento_json["x"])),
+                y=Decimal(str(evento_json["y"])),
+                ocurrencia=evento_json["ocurrencia"],
+                revision=evento_json["revision"],
+                estaciones=set(evento_json["estaciones"]),
+            )
+            cuerpo.estado = EstadoAtencion(evento_json["estado"])
+            cuerpo.en_zona_poblada = evento_json["en_zona_poblada"]
+            cuerpo.prioridad = evento_json["prioridad"]
+            cuerpos_temp[eid_int] = cuerpo
 
         # Reconstruct queue
         cola_temp = Cola()
@@ -1408,6 +1453,11 @@ class CatalogoSismico:
         self.indice_activos = indice_temp
         self.archivados = archivados_temp
         self.eliminados = eliminados_temp
+        self.cuerpos_eliminados = cuerpos_temp
+        if "registro_estaciones" in datos:
+            self.estaciones = self._validar_estaciones(datos["registro_estaciones"])
+        else:
+            self.estaciones = frozenset()
         self.reportes_pendientes = cola_temp
 
     def exportar_escenario_completo(self) -> dict:
@@ -1473,10 +1523,14 @@ class CatalogoSismico:
             },
             "zonas": [serializar_zona(zona) for zona in self.zonas],
             "estaciones": sorted(list(todas_estaciones)),
+            "registro_estaciones": sorted(self.estaciones),
             "avl": self.avl.exportar_topologia(),
             "eventos_activos": {eid: serializar_evento(evt) for eid, evt in self.indice_activos.items()},
             "eventos_historicos": {eid: serializar_evento(evt) for eid, evt in self.archivados.items()},
             "ids_eliminados": sorted(list(self.eliminados)),
+            "eventos_eliminados": {
+                eid: serializar_evento(evt) for eid, evt in self.cuerpos_eliminados.items()
+            },
             "cola_fifo": [serializar_reporte(reporte) for reporte in self.reportes_pendientes],
             "historial": [{"descripcion": snap.descripcion} for snap in self.historial._elementos],
             "metricas": self.metricas.copy(),
