@@ -7,8 +7,16 @@ import tkinter as tk
 from tkinter import filedialog, simpledialog, ttk, messagebox
 
 from src.catalogo import CatalogoSismico, leer_json_archivo
-from src.dominio import Evento, Reporte, ResultadoConsulta, Zona, fecha_utc
-
+from src.dominio import (
+    Evento,
+    Reporte,
+    ResultadoConsulta,
+    VistaEventoMapa,
+    VistaNodo,
+    VistaZona,
+    Zona,
+    fecha_utc,
+)
 
 def texto_a_fecha_utc(texto: str) -> str:
     """Turn a short date into the ISO UTC string the catalog expects.
@@ -273,7 +281,6 @@ class VentanaSismoLab(tk.Tk):
                     x=valores["x"],
                     y=valores["y"],
                     ocurrencia=texto_a_fecha_utc(valores["ocurrencia"]),
-                    ocurrencia=valores["ocurrencia"],
                     revision=1,
                     estaciones={valores["estacion"]},
                 )
