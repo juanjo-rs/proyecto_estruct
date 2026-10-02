@@ -1,4 +1,4 @@
-"""Minimal GUI shell; widgets must call the catalog service, never the AVL directly."""
+"""Page-style window. Widgets call the catalog service and never the AVL directly."""
 
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -7,63 +7,256 @@ import tkinter as tk
 from tkinter import filedialog, simpledialog, ttk, messagebox
 
 from src.catalogo import CatalogoSismico, leer_json_archivo
-from src.dominio import Evento, Reporte, ResultadoConsulta, Zona
+from src.dominio import (
+    Evento,
+    Reporte,
+    ResultadoConsulta,
+    VistaEventoMapa,
+    VistaNodo,
+    VistaZona,
+    Zona,
+    fecha_utc,
+)
+
+def texto_a_fecha_utc(texto: str) -> str:
+    """Turn a short date into the ISO UTC string the catalog expects.
+
+    Accepts 2026-10-01 18:30, with or without seconds, and a full ISO value
+    that already includes Z or an offset. The catalog rules stay unchanged.
+    """
+    limpio = texto.strip()
+    if not limpio:
+        raise ValueError("Falta la fecha.")
+    if limpio.endswith("Z") or "+" in limpio[10:]:
+        return fecha_utc(limpio).strftime("%Y-%m-%dT%H:%M:%SZ")
+    for formato in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M"):
+        try:
+            fecha = datetime.strptime(limpio, formato).replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+        return fecha.strftime("%Y-%m-%dT%H:%M:%SZ")
+    raise ValueError("Usa fecha y hora, por ejemplo 2026-10-01 18:30. Se guarda en UTC.")
+
+
+SEPARACION_X_NODO = 100
+SEPARACION_Y_NODO = 84
+MARGEN_ARBOL = 48
+
+
+def posiciones_arbol(vista: dict[int, VistaNodo], raiz_id: int) -> dict[int, tuple[float, float]]:
+    """Place nodes by inorder rank and depth with a fixed gap.
+
+    X grows one slot per node, so a wide balanced tree stays readable and
+    scrolls sideways. Y grows with depth, so a long BST scrolls downward
+    instead of being squeezed into the window.
+    """
+    posiciones: dict[int, tuple[float, float]] = {}
+    cursor = 0
+
+    def visitar(nodo_id: int, profundidad: int) -> None:
+        nonlocal cursor
+        nodo = vista[nodo_id]
+        if nodo.izquierdo_id is not None:
+            visitar(nodo.izquierdo_id, profundidad + 1)
+        posiciones[nodo_id] = (
+            MARGEN_ARBOL + cursor * SEPARACION_X_NODO,
+            MARGEN_ARBOL + profundidad * SEPARACION_Y_NODO,
+        )
+        cursor += 1
+        if nodo.derecho_id is not None:
+            visitar(nodo.derecho_id, profundidad + 1)
+
+    visitar(raiz_id, 0)
+    return posiciones
 
 
 class VentanaSismoLab(tk.Tk):
     """Initial window that makes the required separation GUI/business explicit."""
 
+    PAGINA = "#f3efe6"
+    TINTA = "#1e2933"
+    ENCABEZADO = "#243044"
+    ACENTO = "#d4543c"
+    TARJETA = "#fffdf8"
+    SUAVE = "#5c6b73"
+
     def __init__(self) -> None:
         super().__init__()
         self.title("SismoLab AVL")
-        self.minsize(720, 420)
+        self.minsize(860, 560)
+        self.geometry("980x720")
+        self.configure(bg=self.PAGINA)
         self.catalogo = CatalogoSismico(
             [Zona("Zona inicial", 0, 1000, 0, 1000, False)],
             datetime.now(timezone.utc).replace(microsecond=0),
         )
-        ttk.Label(self, text="SismoLab AVL", font=("Segoe UI", 20, "bold")).pack(pady=(24, 8))
-        ttk.Label(
-            self,
-            text="Base inicial. La interfaz debe usar CatalogoSismico; no debe manipular nodos AVL directamente.",
-            wraplength=620,
-        ).pack(padx=28)
-        self.estado = ttk.Label(self, text="Eventos activos: 0 | Cola: 0 | Modo normal")
-        self.estado.pack(pady=20)
-        ttk.Button(self, text="Crear evento", command=self.abrir_crear_evento).pack(pady=4)
-        ttk.Button(self, text="Consultar evento", command=self.abrir_consultar_evento).pack(pady=4)
-        ttk.Button(self, text="Corregir evento", command=self.abrir_corregir_evento).pack(pady=4)
-        ttk.Button(self, text="Marcar revisado", command=self.abrir_marcar_revisado).pack(pady=4)
-        ttk.Button(self, text="Eliminar evento", command=self.abrir_eliminar_evento).pack(pady=4)
-        ttk.Button(self, text="Actualizar indicadores", command=self.actualizar_indicadores).pack()
-        ttk.Button(self, text="Activar modo estres", command=self.activar_estres).pack(pady=4)
-        ttk.Button(self, text="Desactivar (recuperar)", command=self.desactivar_estres).pack(pady=4)
-        ttk.Button(self, text="Gestionar cola de reportes", command=self.abrir_ventana_cola).pack(pady=4)
-        ttk.Button(self, text="Visualizar arboles", command=self.abrir_ventana_visualizacion).pack(pady=4)
-        ttk.Button(self, text="Visualizar mapa", command=self.abrir_ventana_mapa).pack(pady=4)
-        ttk.Button(self, text="Deshacer", command=self.deshacer_accion).pack(pady=4)
-        ttk.Button(self, text="Gestionar versiones", command=self.abrir_ventana_versiones).pack(pady=4)
-        ttk.Button(self, text="Verificar estructura", command=self.verificar_estructura).pack(pady=4)
-        ttk.Button(self, text="Indicadores detallados", command=self.mostrar_indicadores_detallados).pack(pady=4)
-        ttk.Button(self, text="Cambiar parametro", command=self.abrir_cambiar_parametro).pack(pady=4)
-        ttk.Button(self, text="Configurar estaciones", command=self.abrir_configurar_estaciones).pack(pady=4)
-        ttk.Button(self, text="Avanzar reloj", command=self.abrir_avanzar_reloj).pack(pady=4)
-        ttk.Button(self, text="Consultar asociaciones", command=self.abrir_consultar_asociaciones).pack(pady=4)
-        ttk.Button(self, text="Top-k pendientes", command=self.abrir_top_k_pendientes).pack(pady=4)
-        ttk.Button(self, text="Consultar por magnitud", command=self.abrir_consultar_magnitud).pack(pady=4)
-        ttk.Button(self, text="Consultar por profundidad y fecha", command=self.abrir_consultar_profundidad_fecha).pack(pady=4)
-        ttk.Button(self, text="Acceso costoso", command=self.abrir_acceso_costoso).pack(pady=4)
+        self._armar_pagina()
 
-    def _abrir_formulario(self, titulo: str, campos: tuple[tuple[str, str], ...], al_aceptar) -> None:
+    def _armar_pagina(self) -> None:
+        """Build the colored page. Buttons only call catalog methods."""
+        encabezado = tk.Frame(self, bg=self.ENCABEZADO)
+        encabezado.pack(fill="x")
+        tk.Label(
+            encabezado,
+            text="SismoLab AVL",
+            bg=self.ENCABEZADO,
+            fg="#fffdf8",
+            font=("Segoe UI", 22, "bold"),
+        ).pack(anchor="w", padx=28, pady=(18, 0))
+        tk.Label(
+            encabezado,
+            text="Observatorio sismico  ·  la ventana pide acciones al catalogo",
+            bg=self.ENCABEZADO,
+            fg="#d7c4b8",
+            font=("Segoe UI", 10),
+        ).pack(anchor="w", padx=28, pady=(0, 16))
+
+        franja = tk.Frame(self, bg="#efe6d8")
+        franja.pack(fill="x")
+        self.estado = tk.Label(
+            franja,
+            text="Eventos activos: 0 | Cola: 0 | Modo normal",
+            bg="#efe6d8",
+            fg=self.TINTA,
+            font=("Segoe UI", 10),
+            anchor="w",
+            justify="left",
+            wraplength=900,
+        )
+        self.estado.pack(fill="x", padx=28, pady=10)
+
+        lienzo = tk.Canvas(self, bg=self.PAGINA, highlightthickness=0)
+        barra = ttk.Scrollbar(self, orient="vertical", command=lienzo.yview)
+        lienzo.configure(yscrollcommand=barra.set)
+        barra.pack(side="right", fill="y")
+        lienzo.pack(side="left", fill="both", expand=True)
+        contenido = tk.Frame(lienzo, bg=self.PAGINA)
+        ventana = lienzo.create_window((0, 0), window=contenido, anchor="nw")
+
+        def ajustar(_evento=None) -> None:
+            lienzo.configure(scrollregion=lienzo.bbox("all"))
+            lienzo.itemconfigure(ventana, width=lienzo.winfo_width())
+
+        contenido.bind("<Configure>", ajustar)
+        lienzo.bind("<Configure>", ajustar)
+
+        def al_rueda(evento: tk.Event) -> None:
+            lienzo.yview_scroll(int(-evento.delta / 120), "units")
+
+        lienzo.bind("<Enter>", lambda _evento: lienzo.bind_all("<MouseWheel>", al_rueda))
+        lienzo.bind("<Leave>", lambda _evento: lienzo.unbind_all("<MouseWheel>"))
+
+        rejilla = tk.Frame(contenido, bg=self.PAGINA)
+        rejilla.pack(fill="both", expand=True, padx=22, pady=18)
+        rejilla.columnconfigure(0, weight=1)
+        rejilla.columnconfigure(1, weight=1)
+
+        eventos = self._tarjeta(rejilla, "Eventos", self.ACENTO)
+        self._boton(eventos, "Crear evento", self.abrir_crear_evento)
+        self._boton(eventos, "Consultar evento", self.abrir_consultar_evento)
+        self._boton(eventos, "Corregir evento", self.abrir_corregir_evento)
+        self._boton(eventos, "Marcar revisado", self.abrir_marcar_revisado)
+        self._boton(eventos, "Eliminar evento", self.abrir_eliminar_evento)
+        eventos.master.grid(row=0, column=0, sticky="nsew", padx=8, pady=8)
+
+        escenario = self._tarjeta(rejilla, "Escenario", "#2f6f6a")
+        self._boton(escenario, "Cambiar parametro", self.abrir_cambiar_parametro)
+        self._boton(escenario, "Configurar estaciones", self.abrir_configurar_estaciones)
+        self._boton(escenario, "Gestionar zonas", self.abrir_gestionar_zonas)
+        self._boton(escenario, "Avanzar reloj", self.abrir_avanzar_reloj)
+        self._boton(escenario, "Activar modo estres", self.activar_estres)
+        self._boton(escenario, "Desactivar (recuperar)", self.desactivar_estres)
+        escenario.master.grid(row=0, column=1, sticky="nsew", padx=8, pady=8)
+
+        consultas = self._tarjeta(rejilla, "Consultas", "#3d5a80")
+        self._boton(consultas, "Consultar asociaciones", self.abrir_consultar_asociaciones)
+        self._boton(consultas, "Top-k pendientes", self.abrir_top_k_pendientes)
+        self._boton(consultas, "Consultar por magnitud", self.abrir_consultar_magnitud)
+        self._boton(consultas, "Consultar por profundidad y fecha", self.abrir_consultar_profundidad_fecha)
+        self._boton(consultas, "Acceso costoso", self.abrir_acceso_costoso)
+        consultas.master.grid(row=1, column=0, sticky="nsew", padx=8, pady=8)
+
+        estructura = self._tarjeta(rejilla, "Estructura", "#8a5a2b")
+        self._boton(estructura, "Visualizar arboles", self.abrir_ventana_visualizacion)
+        self._boton(estructura, "Visualizar mapa", self.abrir_ventana_mapa)
+        self._boton(estructura, "Verificar estructura", self.verificar_estructura)
+        self._boton(estructura, "Indicadores detallados", self.mostrar_indicadores_detallados)
+        self._boton(estructura, "Actualizar indicadores", self.actualizar_indicadores)
+        estructura.master.grid(row=1, column=1, sticky="nsew", padx=8, pady=8)
+
+        operacion = self._tarjeta(rejilla, "Operacion", "#3f4c5a")
+        self._boton(operacion, "Gestionar cola de reportes", self.abrir_ventana_cola)
+        self._boton(operacion, "Deshacer", self.deshacer_accion)
+        self._boton(operacion, "Gestionar versiones", self.abrir_ventana_versiones)
+        operacion.master.grid(row=2, column=0, columnspan=2, sticky="nsew", padx=8, pady=8)
+
+    def _tarjeta(self, parent: tk.Frame, titulo: str, color: str) -> tk.Frame:
+        """Return the inner frame of one colored card."""
+        caja = tk.Frame(parent, bg=self.TARJETA, highlightbackground="#e4ddd0", highlightthickness=1)
+        tk.Frame(caja, bg=color, width=6).pack(side="left", fill="y")
+        cuerpo = tk.Frame(caja, bg=self.TARJETA)
+        cuerpo.pack(side="left", fill="both", expand=True, padx=14, pady=12)
+        tk.Label(
+            cuerpo,
+            text=titulo,
+            bg=self.TARJETA,
+            fg=color,
+            font=("Segoe UI", 13, "bold"),
+        ).pack(anchor="w", pady=(0, 8))
+        return cuerpo
+
+    def _boton(self, parent: tk.Frame, texto: str, comando) -> None:
+        """Flat page button. comando is a catalog-facing method of this window."""
+        tk.Button(
+            parent,
+            text=texto,
+            command=comando,
+            bg="#f7f1e8",
+            fg=self.TINTA,
+            activebackground=self.ACENTO,
+            activeforeground="#fffdf8",
+            relief="flat",
+            bd=0,
+            font=("Segoe UI", 10),
+            padx=12,
+            pady=7,
+            cursor="hand2",
+            anchor="w",
+        ).pack(fill="x", pady=3)
+
+    def _abrir_formulario(
+        self,
+        titulo: str,
+        campos: tuple[tuple[str, str], ...],
+        al_aceptar,
+        valores_iniciales: dict[str, str] | None = None,
+        ayuda: str | None = None,
+        campo_reloj: str | None = None,
+    ) -> None:
         """Show labeled entries. al_aceptar receives the stripped text of each field."""
         dialogo = tk.Toplevel(self)
         dialogo.title(titulo)
         dialogo.transient(self)
         entradas: dict[str, ttk.Entry] = {}
+        iniciales = valores_iniciales or {}
         for fila, (clave, etiqueta) in enumerate(campos):
             ttk.Label(dialogo, text=etiqueta).grid(row=fila, column=0, padx=8, pady=4, sticky="w")
             caja = ttk.Entry(dialogo, width=28)
             caja.grid(row=fila, column=1, padx=8, pady=4)
+            if clave in iniciales:
+                caja.insert(0, iniciales[clave])
             entradas[clave] = caja
+            if campo_reloj == clave:
+                ttk.Button(
+                    dialogo,
+                    text="Usar reloj",
+                    command=lambda caja=caja: self._poner_reloj(caja),
+                ).grid(row=fila, column=2, padx=4)
+
+        if ayuda:
+            ttk.Label(dialogo, text=ayuda, wraplength=360).grid(
+                row=len(campos), column=0, columnspan=3, padx=8, pady=(4, 0), sticky="w"
+            )
 
         def aceptar() -> None:
             valores = {clave: caja.get().strip() for clave, caja in entradas.items()}
@@ -72,8 +265,29 @@ class VentanaSismoLab(tk.Tk):
                 self.actualizar_indicadores()
 
         ttk.Button(dialogo, text="Aceptar", command=aceptar).grid(
-            row=len(campos), column=1, padx=8, pady=8, sticky="e"
+              row=len(campos) + (1 if ayuda else 0), column=1, padx=8, pady=8, sticky="e"
         )
+
+    def _texto_reloj(self) -> str:
+        """Current simulation clock as the UTC text the form can show."""
+        return self.catalogo.reloj.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def _poner_reloj(self, caja: ttk.Entry) -> None:
+        """Replace one entry with the simulation clock."""
+        caja.delete(0, tk.END)
+        caja.insert(0, self._texto_reloj())
+
+    def _siguiente_identificador(self) -> int:
+        """Smallest free id so the form does not ask the user to invent one."""
+        usados = (
+            set(self.catalogo.indice_activos)
+            | set(self.catalogo.archivados)
+            | set(self.catalogo.eliminados)
+        )
+        candidato = 1
+        while candidato in usados and candidato < 999999:
+            candidato += 1
+        return candidato
 
     def _leer_identificador(self, texto: str) -> int:
         """Convert a form id into an int. ValueError is shown by the caller."""
@@ -99,7 +313,7 @@ class VentanaSismoLab(tk.Tk):
                     profundidad_hipocentro=valores["profundidad_hipocentro"],
                     x=valores["x"],
                     y=valores["y"],
-                    ocurrencia=valores["ocurrencia"],
+                    ocurrencia=texto_a_fecha_utc(valores["ocurrencia"]),
                     revision=1,
                     estaciones={valores["estacion"]},
                 )
@@ -114,7 +328,22 @@ class VentanaSismoLab(tk.Tk):
             )
             return True
 
-        self._abrir_formulario("Crear evento", campos, al_aceptar)
+        self._abrir_formulario(
+            "Crear evento",
+            campos,
+            al_aceptar,
+            valores_iniciales={
+                "identificador": str(self._siguiente_identificador()),
+                "magnitud": "4.5",
+                "profundidad_hipocentro": "30.0",
+                "x": "100.0",
+                "y": "100.0",
+                "ocurrencia": self._texto_reloj(),
+                "estacion": "EST-01",
+            },
+            ayuda="La fecha puede ser 2026-10-01 18:30. No hace falta escribir la Z.",
+            campo_reloj="ocurrencia",
+        )
 
     def abrir_consultar_evento(self) -> None:
         """Show the catalog state of one id without changing the trees."""
@@ -159,6 +388,8 @@ class VentanaSismoLab(tk.Tk):
                     for campo in ("magnitud", "profundidad_hipocentro", "x", "y", "ocurrencia")
                     if valores[campo]
                 }
+                if "ocurrencia" in datos:
+                    datos["ocurrencia"] = texto_a_fecha_utc(datos["ocurrencia"])
                 if not datos:
                     raise ValueError("Escribe al menos un campo para corregir.")
                 corregido = self.catalogo.corregir_evento(identificador, datos)
@@ -220,7 +451,7 @@ class VentanaSismoLab(tk.Tk):
             return True
 
         self._abrir_formulario("Eliminar evento", (("identificador", "Identificador"),), al_aceptar)
-
+    
     def _texto_consulta(self, resultado: ResultadoConsulta) -> str:
         """Format a catalog query for a message box. Does not touch the trees."""
         lineas = [
@@ -279,11 +510,148 @@ class VentanaSismoLab(tk.Tk):
             al_aceptar,
         )
 
+    def abrir_gestionar_zonas(self) -> None:
+        """Add or remove zones. The catalog reclassifies events and can undo."""
+        dialogo = tk.Toplevel(self)
+        dialogo.title("Gestionar zonas")
+        dialogo.transient(self)
+        ttk.Label(
+            dialogo,
+            text=(
+                "La primera zona es la inicial. Las demas tienen que quedar dentro de ella. "
+                "Editar cambia una zona que ya existe. Deshacer vuelve a la lista anterior."
+            ),
+            wraplength=420,
+        ).pack(padx=8, pady=(8, 4), anchor="w")
+        lista = tk.Listbox(dialogo, width=64, height=8)
+        lista.pack(padx=8, pady=4, fill="x")
+
+        def texto_zona(zona: Zona) -> str:
+            marca = "poblada" if zona.poblada else "no poblada"
+            return f"{zona.nombre}   x {zona.x_min}-{zona.x_max}   y {zona.y_min}-{zona.y_max}   {marca}"
+
+        def refrescar() -> None:
+            lista.delete(0, tk.END)
+            for zona in self.catalogo.zonas:
+                lista.insert(tk.END, texto_zona(zona))
+
+        campos_zona = (
+            ("nombre", "Nombre"),
+            ("x_min", "X minima"),
+            ("x_max", "X maxima"),
+            ("y_min", "Y minima"),
+            ("y_max", "Y maxima"),
+            ("poblada", "Poblada (si o no)"),
+        )
+
+        def zona_desde_formulario(formulario: tk.Toplevel, valores: dict[str, str], titulo: str) -> Zona | None:
+            marca = valores["poblada"].strip().lower()
+            if marca not in ("si", "no"):
+                messagebox.showerror(titulo, "En poblada escribe si o no.", parent=formulario)
+                return None
+            return Zona(
+                valores["nombre"],
+                valores["x_min"],
+                valores["x_max"],
+                valores["y_min"],
+                valores["y_max"],
+                marca == "si",
+            )
+
+        def aplicar(formulario: tk.Toplevel, titulo: str, nuevas: list[Zona]) -> bool:
+            try:
+                self.catalogo.configurar_zonas(nuevas)
+            except ValueError as error:
+                messagebox.showerror(titulo, str(error), parent=formulario)
+                return False
+            refrescar()
+            self.actualizar_indicadores()
+            return True
+
+        def quitar() -> None:
+            seleccion = lista.curselection()
+            if not seleccion:
+                messagebox.showerror("Gestionar zonas", "Elige una zona de la lista.", parent=dialogo)
+                return
+            indice = seleccion[0]
+            if indice == 0:
+                messagebox.showerror(
+                    "Gestionar zonas",
+                    "La zona inicial no se quita. Usa Editar para cambiarla.",
+                    parent=dialogo,
+                )
+                return
+            restantes = [zona for i, zona in enumerate(self.catalogo.zonas) if i != indice]
+            try:
+                self.catalogo.configurar_zonas(restantes)
+            except ValueError as error:
+                messagebox.showerror("Gestionar zonas", str(error), parent=dialogo)
+                return
+            refrescar()
+            self.actualizar_indicadores()
+
+        def agregar() -> None:
+            def al_aceptar(formulario: tk.Toplevel, valores: dict[str, str]) -> bool:
+                zona = zona_desde_formulario(formulario, valores, "Agregar zona")
+                if zona is None:
+                    return False
+                return aplicar(formulario, "Agregar zona", [*self.catalogo.zonas, zona])
+
+            self._abrir_formulario(
+                "Agregar zona",
+                campos_zona,
+                al_aceptar,
+                ayuda="Tiene que quedar dentro de la zona inicial. Coordenadas de 0.0 a 1000.0, un decimal como maximo.",
+            )
+
+        def editar() -> None:
+            seleccion = lista.curselection()
+            if not seleccion:
+                messagebox.showerror("Gestionar zonas", "Elige una zona de la lista.", parent=dialogo)
+                return
+            indice = seleccion[0]
+            actual = self.catalogo.zonas[indice]
+            ayuda = (
+                "Si cambias los limites, las demas zonas tienen que seguir dentro."
+                if indice == 0
+                else "Tiene que quedar dentro de la zona inicial."
+            )
+
+            def al_aceptar(formulario: tk.Toplevel, valores: dict[str, str]) -> bool:
+                zona = zona_desde_formulario(formulario, valores, "Editar zona")
+                if zona is None:
+                    return False
+                nuevas = list(self.catalogo.zonas)
+                nuevas[indice] = zona
+                return aplicar(formulario, "Editar zona", nuevas)
+
+            self._abrir_formulario(
+                "Editar zona",
+                campos_zona,
+                al_aceptar,
+                valores_iniciales={
+                    "nombre": actual.nombre,
+                    "x_min": str(actual.x_min),
+                    "x_max": str(actual.x_max),
+                    "y_min": str(actual.y_min),
+                    "y_max": str(actual.y_max),
+                    "poblada": "si" if actual.poblada else "no",
+                },
+                ayuda=ayuda,
+            )
+
+        botones = ttk.Frame(dialogo)
+        botones.pack(padx=8, pady=8, fill="x")
+        ttk.Button(botones, text="Agregar", command=agregar).pack(side="left", padx=4)
+        ttk.Button(botones, text="Editar", command=editar).pack(side="left", padx=4)
+        ttk.Button(botones, text="Quitar", command=quitar).pack(side="left", padx=4)
+        refrescar()
+
     def abrir_avanzar_reloj(self) -> None:
         """Advance the simulation clock. The catalog rejects a time in the past."""
         def al_aceptar(dialogo: tk.Toplevel, valores: dict[str, str]) -> bool:
             try:
-                self.catalogo.avanzar_reloj(valores["reloj"])
+                self.catalogo.avanzar_reloj(texto_a_fecha_utc(valores["reloj"]))
             except (ValueError, KeyError) as error:
                 messagebox.showerror("Avanzar reloj", str(error), parent=dialogo)
                 return False
@@ -349,7 +717,9 @@ class VentanaSismoLab(tk.Tk):
         def al_aceptar(dialogo: tk.Toplevel, valores: dict[str, str]) -> bool:
             try:
                 resultado = self.catalogo.consultar_por_profundidad_y_fecha(
-                    valores["limite"], valores["inicio"], valores["fin"]
+                    valores["limite"],
+                    texto_a_fecha_utc(valores["inicio"]),
+                    texto_a_fecha_utc(valores["fin"]),
                 )
             except (ValueError, KeyError) as error:
                 messagebox.showerror("Consultar por profundidad y fecha", str(error), parent=dialogo)
@@ -371,6 +741,7 @@ class VentanaSismoLab(tk.Tk):
             messagebox.showerror("Acceso costoso", str(error))
             return
         messagebox.showinfo("Acceso costoso", self._texto_consulta(resultado))
+
 
     def actualizar_indicadores(self) -> None:
         modo = "estres" if self.catalogo.modo_estres else "normal"
@@ -789,34 +1160,48 @@ class VentanaSismoLab(tk.Tk):
                 reporte.evento.revision,
             ))
 
+    def _lienzo_arbol(self, parent: tk.Widget) -> tk.Canvas:
+        """Canvas with both scrollbars. The wheel moves vertically; Shift moves sideways."""
+        marco = ttk.Frame(parent)
+        marco.pack(fill=tk.BOTH, expand=True)
+        canvas = tk.Canvas(marco, bg="white", highlightthickness=0)
+        barra_y = ttk.Scrollbar(marco, orient=tk.VERTICAL, command=canvas.yview)
+        barra_x = ttk.Scrollbar(marco, orient=tk.HORIZONTAL, command=canvas.xview)
+        canvas.configure(xscrollcommand=barra_x.set, yscrollcommand=barra_y.set)
+        barra_y.pack(side=tk.RIGHT, fill=tk.Y)
+        barra_x.pack(side=tk.BOTTOM, fill=tk.X)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        def al_rueda(evento: tk.Event) -> None:
+            pasos = int(-evento.delta / 120) or (-1 if evento.delta > 0 else 1)
+            if evento.state & 0x0001:
+                canvas.xview_scroll(pasos, "units")
+            else:
+                canvas.yview_scroll(pasos, "units")
+
+        canvas.bind("<MouseWheel>", al_rueda)
+        return canvas
+
     def abrir_ventana_visualizacion(self) -> None:
         """Open the tree visualization window with AVL and BST side by side."""
         ventana_vis = tk.Toplevel(self)
         ventana_vis.title("Visualizacion de Arboles AVL y BST")
         ventana_vis.geometry("1200x700")
 
-        # Control variables
         self._coordenadas_nodos_avl = {}  # id -> (x, y)
         self._coordenadas_nodos_bst = {}  # id -> (x, y)
-        self._radio_nodo = 25
+        self._radio_nodo = 16
 
-        # Frame for AVL
-        frame_avl = ttk.LabelFrame(ventana_vis, text="AVL (Balanceado)")
-        frame_avl.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, pady=5)
-
-        canvas_avl = tk.Canvas(frame_avl, bg="white")
-        canvas_avl.pack(fill=tk.BOTH, expand=True)
-
-        # Frame for BST
-        frame_bst = ttk.LabelFrame(ventana_vis, text="BST (No Balanceado)")
-        frame_bst.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, pady=5)
-
-        canvas_bst = tk.Canvas(frame_bst, bg="white")
-        canvas_bst.pack(fill=tk.BOTH, expand=True)
-
-        # Frame for controls and info
         frame_control = ttk.Frame(ventana_vis)
         frame_control.pack(side=tk.BOTTOM, fill=tk.X, padx=5, pady=5)
+
+        frame_avl = ttk.LabelFrame(ventana_vis, text="AVL (Balanceado)")
+        frame_avl.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, pady=5)
+        canvas_avl = self._lienzo_arbol(frame_avl)
+
+        frame_bst = ttk.LabelFrame(ventana_vis, text="BST (No Balanceado)")
+        frame_bst.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, pady=5)
+        canvas_bst = self._lienzo_arbol(frame_bst)
 
         ttk.Button(frame_control, text="Redibujar", command=lambda: self._redibujar_arboles(canvas_avl, canvas_bst)).pack(side=tk.LEFT, padx=5)
 
@@ -824,14 +1209,17 @@ class VentanaSismoLab(tk.Tk):
         frame_info = ttk.LabelFrame(frame_control, text="Informacion del Nodo")
         frame_info.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5)
 
-        info_label = ttk.Label(frame_info, text="Click en un nodo para inspeccionar", wraplength=400)
+        info_label = ttk.Label(
+            frame_info,
+            text="Click en un nodo para inspeccionar. Rueda para bajar; Shift+rueda para ir a los lados.",
+            wraplength=400,
+        )
         info_label.pack(padx=5, pady=5)
 
-        # Bind click events
         canvas_avl.bind("<Button-1>", lambda e: self._inspeccionar_nodo(e, canvas_avl, "avl", info_label))
         canvas_bst.bind("<Button-1>", lambda e: self._inspeccionar_nodo(e, canvas_bst, "bst", info_label))
 
-        # Initial draw
+        ventana_vis.update_idletasks()
         self._redibujar_arboles(canvas_avl, canvas_bst)
 
     def _redibujar_arboles(self, canvas_avl: tk.Canvas, canvas_bst: tk.Canvas) -> None:
@@ -845,154 +1233,77 @@ class VentanaSismoLab(tk.Tk):
         # Draw AVL
         vista_avl, raiz_avl = self.catalogo.obtener_vista_arbol("avl")
         if raiz_avl is None:
-            canvas_avl.create_text(
-                canvas_avl.winfo_width() / 2,
-                canvas_avl.winfo_height() / 2,
-                text="Arbol AVL vacio",
-                font=("Segoe UI", 14),
-                fill="gray"
-            )
+            self._marcar_arbol_vacio(canvas_avl, "Arbol AVL vacio")
         else:
-            self._dibujar_arbol(canvas_avl, vista_avl, raiz_avl, "blue")
+            self._dibujar_arbol(canvas_avl, vista_avl, raiz_avl, "blue", self._coordenadas_nodos_avl)
 
-        # Draw BST
         vista_bst, raiz_bst = self.catalogo.obtener_vista_arbol("bst")
         if raiz_bst is None:
-            canvas_bst.create_text(
-                canvas_bst.winfo_width() / 2,
-                canvas_bst.winfo_height() / 2,
-                text="Arbol BST vacio",
-                font=("Segoe UI", 14),
-                fill="gray"
-            )
+            self._marcar_arbol_vacio(canvas_bst, "Arbol BST vacio")
         else:
-            self._dibujar_arbol(canvas_bst, vista_bst, raiz_bst, "green")
+            self._dibujar_arbol(canvas_bst, vista_bst, raiz_bst, "green", self._coordenadas_nodos_bst)
+
+    def _marcar_arbol_vacio(self, canvas: tk.Canvas, texto: str) -> None:
+        """Show an empty-tree message and drop any previous scroll range."""
+        ancho = max(canvas.winfo_width(), 200)
+        alto = max(canvas.winfo_height(), 200)
+        canvas.configure(scrollregion=(0, 0, ancho, alto))
+        canvas.create_text(ancho / 2, alto / 2, text=texto, font=("Segoe UI", 14), fill="gray")
 
     def _dibujar_arbol(
         self,
         canvas: tk.Canvas,
-        vista: dict[int, "VistaNodo"],
+        vista: dict[int, VistaNodo],
         raiz_id: int,
         color: str,
+        coordenadas: dict[int, tuple[float, float]],
     ) -> None:
-        """
-        Draw a tree on the canvas using the view data.
+        """Draw one tree. Positions come from inorder slots, then the canvas scrolls."""
+        posiciones = posiciones_arbol(vista, raiz_id)
+        ancho_vista = max(canvas.winfo_width(), 200)
+        alto_vista = max(canvas.winfo_height(), 200)
+        ancho = max(x for x, _y in posiciones.values()) + MARGEN_ARBOL
+        alto = max(y for _x, y in posiciones.values()) + MARGEN_ARBOL + 28
+        desplazamiento_x = (ancho_vista - ancho) / 2 if ancho < ancho_vista else 0
+        canvas.configure(scrollregion=(0, 0, max(ancho, ancho_vista), max(alto, alto_vista)))
+        canvas.xview_moveto(0)
+        canvas.yview_moveto(0)
 
-        Strategy:
-        - Root at top center
-        - Horizontal width halves at each level
-        - Vertical spacing fixed (60px per level)
-        - Left child X = parent X - width/2
-        - Right child X = parent X + width/2
-        - Child Y = parent Y + level_height
-        """
-        canvas_width = canvas.winfo_width()
-        canvas_height = canvas.winfo_height()
-        if canvas_width < 100:
-            canvas_width = 500  # Default if not yet rendered
-        if canvas_height < 100:
-            canvas_height = 500
+        for nodo_id, (x, y) in posiciones.items():
+            coordenadas[nodo_id] = (x + desplazamiento_x, y)
 
-        # Calculate tree height to adjust spacing
-        alturas = {nodo_id: nodo.altura for nodo_id, nodo in vista.items()}
-        max_altura = max(alturas.values()) if alturas else 0
-        nivel_height = min(60, canvas_height / (max_altura + 2))  # Adjust for tall trees
-
-        # Calculate coordinates recursively
-        def calcular_coordenadas(
-            nodo_id: int,
-            x: float,
-            y: float,
-            ancho_disponible: float,
-            profundidad: int,
-        ) -> None:
-            nodo = vista[nodo_id]
-            coordenadas = (x, y)
-
-            # Store coordinates for click detection
-            if color == "blue":
-                self._coordenadas_nodos_avl[nodo_id] = coordenadas
-            else:
-                self._coordenadas_nodos_bst[nodo_id] = coordenadas
-
-            # Calculate child positions
-            ancho_hijo = ancho_disponible / 2
-            y_hijo = y + nivel_height
-
-            if nodo.izquierdo_id is not None:
-                x_izquierdo = x - ancho_hijo / 2
-                calcular_coordenadas(nodo.izquierdo_id, x_izquierdo, y_hijo, ancho_hijo, profundidad + 1)
-
-            if nodo.derecho_id is not None:
-                x_derecho = x + ancho_hijo / 2
-                calcular_coordenadas(nodo.derecho_id, x_derecho, y_hijo, ancho_hijo, profundidad + 1)
-
-        # Start from root
-        x_raiz = canvas_width / 2
-        y_raiz = 50
-        ancho_inicial = canvas_width * 0.8  # Use 80% of canvas width
-        calcular_coordenadas(raiz_id, x_raiz, y_raiz, ancho_inicial, 0)
-
-        # Draw edges first (so they appear behind nodes)
         def dibujar_enlaces(nodo_id: int) -> None:
             nodo = vista[nodo_id]
-            x_padre, y_padre = (
-                self._coordenadas_nodos_avl[nodo_id] if color == "blue"
-                else self._coordenadas_nodos_bst[nodo_id]
-            )
-
-            if nodo.izquierdo_id is not None:
-                x_hijo, y_hijo = (
-                    self._coordenadas_nodos_avl[nodo.izquierdo_id] if color == "blue"
-                    else self._coordenadas_nodos_bst[nodo.izquierdo_id]
-                )
+            x_padre, y_padre = coordenadas[nodo_id]
+            for hijo_id in (nodo.izquierdo_id, nodo.derecho_id):
+                if hijo_id is None:
+                    continue
+                x_hijo, y_hijo = coordenadas[hijo_id]
                 canvas.create_line(x_padre, y_padre, x_hijo, y_hijo, fill="black", width=2)
-                dibujar_enlaces(nodo.izquierdo_id)
-
-            if nodo.derecho_id is not None:
-                x_hijo, y_hijo = (
-                    self._coordenadas_nodos_avl[nodo.derecho_id] if color == "blue"
-                    else self._coordenadas_nodos_bst[nodo.derecho_id]
-                )
-                canvas.create_line(x_padre, y_padre, x_hijo, y_hijo, fill="black", width=2)
-                dibujar_enlaces(nodo.derecho_id)
+                dibujar_enlaces(hijo_id)
 
         dibujar_enlaces(raiz_id)
 
-        # Draw nodes
+        radio = self._radio_nodo
         for nodo_id, nodo in vista.items():
-            x, y = (
-                self._coordenadas_nodos_avl[nodo_id] if color == "blue"
-                else self._coordenadas_nodos_bst[nodo_id]
-            )
-
-            # Draw circle
-            radio = self._radio_nodo
+            x, y = coordenadas[nodo_id]
             canvas.create_oval(
-                x - radio, y - radio,
-                x + radio, y + radio,
-                fill=color,
-                outline="black",
-                width=2
+                x - radio, y - radio, x + radio, y + radio,
+                fill=color, outline="black", width=2,
             )
-
-            # Draw key (P, M, I)
-            clave_texto = f"({nodo.clave[0]}, {nodo.clave[1]}, {nodo.clave[2]})"
+            canvas.create_text(x, y, text=str(nodo.id), font=("Segoe UI", 8, "bold"), fill="white")
             canvas.create_text(
-                x, y,
-                text=clave_texto,
-                font=("Segoe UI", 8),
-                fill="white"
+                x, y + radio + 11,
+                text=f"({nodo.clave[0]}, {nodo.clave[1]})",
+                font=("Segoe UI", 7),
+                fill="black",
             )
-
-            # Draw height and factor for AVL
             if nodo.factor is not None:
-                info_texto = f"h:{nodo.altura} f:{nodo.factor}"
                 canvas.create_text(
-                    x, y + radio + 10,
-                    text=info_texto,
+                    x, y + radio + 22,
+                    text=f"h:{nodo.altura} f:{nodo.factor}",
                     font=("Segoe UI", 7),
-                    fill="black"
+                    fill="black",
                 )
 
     def _inspeccionar_nodo(
@@ -1002,8 +1313,8 @@ class VentanaSismoLab(tk.Tk):
         tipo: str,
         info_label: ttk.Label,
     ) -> None:
-        """Inspect a node when clicked."""
-        x_click, y_click = evento.x, evento.y
+        """Inspect a node when clicked. Coordinates include the scroll offset."""
+        x_click, y_click = canvas.canvasx(evento.x), canvas.canvasy(evento.y)
 
         coordenadas = (
             self._coordenadas_nodos_avl if tipo == "avl"

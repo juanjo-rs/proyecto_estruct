@@ -177,6 +177,73 @@ class CatalogoSismico:
         self._registrar_instantanea("Configurar estaciones")
         self.estaciones = codigos
 
+    def configurar_zonas(self, zonas: Iterable[Zona]) -> None:
+        """Replace the zone list as one undoable action and reclassify events.
+
+        Validation finishes before the snapshot, so a bad zone leaves the
+        scenario untouched. An active event whose priority changes is removed
+        from both trees with the old key and inserted with the new one.
+        """
+        nuevas = [self._validar_zona(zona) for zona in zonas]
+        if not nuevas:
+            raise ValueError("Debe existir al menos una zona.")
+        nombres = [zona.nombre for zona in nuevas]
+        if len(nombres) != len(set(nombres)):
+            raise ValueError("No se puede repetir el nombre de una zona.")
+        marco = nuevas[0]
+        for zona in nuevas[1:]:
+            if (
+                zona.x_min < marco.x_min
+                or zona.x_max > marco.x_max
+                or zona.y_min < marco.y_min
+                or zona.y_max > marco.y_max
+            ):
+                raise ValueError(
+                    f"La zona {zona.nombre} no puede salir de la zona inicial ({marco.nombre})."
+                )
+        self._registrar_instantanea("Configurar zonas")
+        self.zonas = nuevas
+        self._reclasificar_por_zonas()
+
+    def _validar_zona(self, zona: Zona) -> Zona:
+        """Return a zone with coordinates checked against the 0–1000 map."""
+        if not isinstance(zona.nombre, str) or not zona.nombre.strip():
+            raise ValueError("La zona necesita un nombre.")
+        if not isinstance(zona.poblada, bool):
+            raise ValueError("Indica si la zona esta poblada con si o no.")
+        x_min = decimal_un_lugar(zona.x_min, "0.0", "1000.0", "La coordenada x minima")
+        x_max = decimal_un_lugar(zona.x_max, "0.0", "1000.0", "La coordenada x maxima")
+        y_min = decimal_un_lugar(zona.y_min, "0.0", "1000.0", "La coordenada y minima")
+        y_max = decimal_un_lugar(zona.y_max, "0.0", "1000.0", "La coordenada y maxima")
+        if x_min >= x_max or y_min >= y_max:
+            raise ValueError("La zona debe tener ancho y alto positivos.")
+        return Zona(zona.nombre.strip(), x_min, x_max, y_min, y_max, zona.poblada)
+
+    def _reclasificar_por_zonas(self) -> None:
+        """Recompute populated-zone and priority after the zone list changes."""
+        por_mover: list[tuple[Evento, bool, int]] = []
+        for evento in list(self.indice_activos.values()):
+            en_zona = clasificar_zona_poblada(evento, self.zonas)
+            marca_anterior = evento.en_zona_poblada
+            evento.en_zona_poblada = en_zona
+            nueva_prioridad = calcular_prioridad(evento)
+            if nueva_prioridad == evento.prioridad:
+                continue
+            evento.en_zona_poblada = marca_anterior
+            por_mover.append((evento, en_zona, nueva_prioridad))
+        for evento, _en_zona, _prioridad in por_mover:
+            clave = evento.clave()
+            self.avl.eliminar(clave, balancear=not self.modo_estres)
+            self.bst.eliminar(clave)
+        for evento, en_zona, nueva_prioridad in por_mover:
+            evento.en_zona_poblada = en_zona
+            evento.prioridad = nueva_prioridad
+            self.avl.insertar(evento, balancear=not self.modo_estres)
+            self.bst.insertar(evento)
+        for evento in self.archivados.values():
+            evento.en_zona_poblada = clasificar_zona_poblada(evento, self.zonas)
+            evento.prioridad = calcular_prioridad(evento)
+
     def cambiar_parametro(self, nombre: str, valor: object) -> object:
         """Validate, apply, and (for W/R) recompute associations as ONE undoable
         action (C1 / PDF sections 6-7-9-10). Order follows TUTORIA C1 step 3:

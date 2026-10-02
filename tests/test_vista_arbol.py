@@ -1,8 +1,10 @@
 """Test for E2: Tree view API and data integrity."""
 
 from datetime import datetime, timezone
+from decimal import Decimal
 from unittest import TestCase
 
+from interfaz import SEPARACION_X_NODO, SEPARACION_Y_NODO, posiciones_arbol
 from src.catalogo import CatalogoSismico
 from src.dominio import Evento, VistaNodo, Zona
 
@@ -152,3 +154,43 @@ class TestVistaArbol(TestCase):
 
         # BST has no factor
         self.assertIsNone(vista_bst[10].factor)
+
+
+def _nodo(identificador: int, izquierdo: int | None, derecho: int | None) -> VistaNodo:
+    """A view node used only to check layout, not catalog state."""
+    return VistaNodo(
+        identificador,
+        (1, Decimal("1.0"), identificador),
+        izquierdo,
+        derecho,
+        0,
+        None,
+    )
+
+
+class PruebasPosicionesArbol(TestCase):
+    def test_cadena_derecha_crece_hacia_abajo(self) -> None:
+        """A long right spine keeps a fixed step so the bottom stays reachable by scroll."""
+        vista = {
+            identificador: _nodo(identificador, None, identificador + 1 if identificador < 12 else None)
+            for identificador in range(1, 13)
+        }
+        posiciones = posiciones_arbol(vista, 1)
+        ys = [posiciones[identificador][1] for identificador in range(1, 13)]
+        self.assertEqual(ys, sorted(ys))
+        self.assertEqual(ys[1] - ys[0], SEPARACION_Y_NODO)
+        self.assertGreater(ys[-1] - ys[0], 700)
+
+    def test_nodos_quedan_separados_en_horizontal(self) -> None:
+        """Each node owns its own x slot, so a wide balanced tree does not collapse."""
+        vista = {
+            2: _nodo(2, 1, 3),
+            1: _nodo(1, None, None),
+            3: _nodo(3, None, 4),
+            4: _nodo(4, None, None),
+        }
+        posiciones = posiciones_arbol(vista, 2)
+        xs = sorted(x for x, _y in posiciones.values())
+        self.assertEqual(len(xs), len(set(xs)))
+        for izquierda, derecha in zip(xs, xs[1:]):
+            self.assertGreaterEqual(derecha - izquierda, SEPARACION_X_NODO)
