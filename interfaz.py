@@ -38,6 +38,82 @@ def texto_a_fecha_utc(texto: str) -> str:
     raise ValueError("Usa fecha y hora, por ejemplo 2026-10-01 18:30. Se guarda en UTC.")
 
 
+def aplicar_carga_json(catalogo: CatalogoSismico, datos: dict) -> dict:
+    """Send a parsed document to the loader named by tipo_carga.
+
+    A missing or unknown type raises before either loader runs. Each loader
+    builds a temporary scenario and replaces the current one only if every
+    check passes.
+    """
+    tipo = datos.get("tipo_carga")
+    if tipo == "inserciones":
+        return catalogo.cargar_por_inserciones(datos)
+    if tipo == "topologia":
+        # A file stores object keys as text. The loader addresses nodes by int id.
+        preparado = dict(datos)
+        preparado["nodos"] = {int(clave): valor for clave, valor in datos.get("nodos", {}).items()}
+        raiz = datos.get("raiz")
+        preparado["raiz"] = int(raiz) if raiz is not None else None
+        return catalogo.cargar_por_topologia(preparado)
+    raise ValueError("El JSON debe indicar tipo_carga 'inserciones' o 'topologia'.")
+
+
+def texto_resultado_carga(tipo: str, estadisticas: dict) -> str:
+    """Short success text: load kind plus AVL and BST height."""
+    avl = estadisticas["avl"]
+    bst = estadisticas["bst"]
+    return (
+        f"Carga por {tipo} lista.\n"
+        f"AVL raiz {avl['raiz_id']} altura {avl['altura']}\n"
+        f"BST raiz {bst['raiz_id']} altura {bst['altura']}"
+    )
+
+
+def filas_historial_sismico(catalogo: CatalogoSismico) -> list[str]:
+    """Read-only lines for archived events, ordered by identifier.
+
+    This is the seismic history (archivados), not the undo stack.
+    """
+    filas = []
+    for identificador in sorted(catalogo.archivados):
+        evento = catalogo.archivados[identificador]
+        filas.append(
+            f"SIS-{identificador:06d}   P{evento.prioridad}   M{evento.magnitud}   "
+            f"rev {evento.revision}   {evento.estado.value}   {evento.ocurrencia.strftime('%Y-%m-%d %H:%M')}"
+        )
+    return filas
+
+
+def texto_detalle_evento(detalle: dict) -> str:
+    """Format consultar_detalle for the dialog. Read-only; the catalog already queried."""
+    identificador = int(detalle["identificador"])
+    estado = str(detalle["estado"])
+    if estado == "desconocido":
+        return f"SIS-{identificador:06d}: desconocido"
+    lineas = [
+        f"SIS-{identificador:06d}: {estado}",
+        f"prioridad {detalle['prioridad']} | magnitud {detalle['magnitud']}",
+        f"profundidad {detalle['profundidad_hipocentro']} km | ({detalle['x']}, {detalle['y']})",
+        f"revision {detalle['revision']} | {detalle['estado_atencion']}",
+    ]
+    if "mensaje" in detalle:
+        lineas.append(str(detalle["mensaje"]))
+    if "profundidad_nodo" in detalle:
+        lineas.append(
+            f"AVL profundidad {detalle['profundidad_nodo']} | "
+            f"altura {detalle['altura_nodo']} | factor {detalle['factor_balance']}"
+        )
+        lineas.append("acceso costoso: " + ("si" if detalle["acceso_costoso"] else "no"))
+    asociaciones = detalle.get("asociaciones")
+    if isinstance(asociaciones, dict) and "candidatos" in asociaciones:
+        candidatos = ", ".join(str(item["identificador"]) for item in asociaciones["candidatos"]) or "ninguno"
+        referencia = asociaciones["referencia_elegida"]
+        referencia_txt = str(referencia["identificador"]) if referencia else "ninguna"
+        lineas.append(f"candidatos: {candidatos}")
+        lineas.append(f"referencia: {referencia_txt}")
+    return "\n".join(lineas)
+
+
 SEPARACION_X_NODO = 100
 SEPARACION_Y_NODO = 84
 MARGEN_ARBOL = 48
@@ -179,6 +255,7 @@ class VentanaSismoLab(tk.Tk):
         estructura = self._tarjeta(rejilla, "Estructura", "#8a5a2b")
         self._boton(estructura, "Visualizar arboles", self.abrir_ventana_visualizacion)
         self._boton(estructura, "Visualizar mapa", self.abrir_ventana_mapa)
+        self._boton(estructura, "Archivar rama", self.abrir_archivar_rama)
         self._boton(estructura, "Verificar estructura", self.verificar_estructura)
         self._boton(estructura, "Indicadores detallados", self.mostrar_indicadores_detallados)
         self._boton(estructura, "Actualizar indicadores", self.actualizar_indicadores)
@@ -186,6 +263,8 @@ class VentanaSismoLab(tk.Tk):
 
         operacion = self._tarjeta(rejilla, "Operacion", "#3f4c5a")
         self._boton(operacion, "Gestionar cola de reportes", self.abrir_ventana_cola)
+        self._boton(operacion, "Cargar JSON", self.abrir_cargar_json)
+        self._boton(operacion, "Historial sismico", self.abrir_historial_sismico)
         self._boton(operacion, "Deshacer", self.deshacer_accion)
         self._boton(operacion, "Gestionar versiones", self.abrir_ventana_versiones)
         operacion.master.grid(row=2, column=0, columnspan=2, sticky="nsew", padx=8, pady=8)
@@ -350,21 +429,11 @@ class VentanaSismoLab(tk.Tk):
         def al_aceptar(dialogo: tk.Toplevel, valores: dict[str, str]) -> bool:
             try:
                 identificador = self._leer_identificador(valores["identificador"])
-                estado, evento = self.catalogo.consultar(identificador)
+                detalle = self.catalogo.consultar_detalle(identificador)
             except (ValueError, KeyError) as error:
                 messagebox.showerror("Consultar evento", str(error), parent=dialogo)
                 return False
-            if evento is None:
-                texto = f"SIS-{identificador:06d}: {estado}"
-            else:
-                texto = (
-                    f"SIS-{evento.identificador:06d}: {estado}\n"
-                    f"prioridad {evento.prioridad} | magnitud {evento.magnitud}\n"
-                    f"profundidad {evento.profundidad_hipocentro} km | "
-                    f"({evento.x}, {evento.y})\n"
-                    f"revision {evento.revision} | {evento.estado.value}"
-                )
-            messagebox.showinfo("Consultar evento", texto, parent=dialogo)
+            messagebox.showinfo("Consultar evento", texto_detalle_evento(detalle), parent=dialogo)
             return True
 
         self._abrir_formulario("Consultar evento", (("identificador", "Identificador"),), al_aceptar)
@@ -762,23 +831,50 @@ class VentanaSismoLab(tk.Tk):
         self.actualizar_indicadores()
 
     def desactivar_estres(self) -> None:
-        self.catalogo.desactivar_modo_estres()
+        """Leave stress mode and tell the user how many rotations the repair used."""
+        giros = self.catalogo.desactivar_modo_estres()
         self.actualizar_indicadores()
+        messagebox.showinfo("Recuperar AVL", f"Modo normal. Giros de recuperacion: {giros}")
 
-    def seleccionar_y_cargar_json(self) -> None:
-        """GUI function to select a JSON file and load it via the business API."""
+    def abrir_cargar_json(self) -> None:
+        """Pick a JSON file and load it by tipo_carga. A failure leaves the scenario."""
         ruta = filedialog.askopenfilename(
             title="Seleccionar archivo JSON de carga",
             filetypes=[("Archivos JSON", "*.json"), ("Todos los archivos", "*.*")],
         )
-        if ruta:
-            try:
-                datos = leer_json_archivo(ruta)
-                estadisticas = self.catalogo.cargar_por_inserciones(datos)
-                self.actualizar_indicadores()
-                print(f"Carga exitosa. Estadísticas: {estadisticas}")
-            except Exception as e:
-                print(f"Error al cargar JSON: {e}")
+        if not ruta:
+            return
+        try:
+            datos = leer_json_archivo(ruta)
+            estadisticas = aplicar_carga_json(self.catalogo, datos)
+        except (ValueError, OSError) as error:
+            messagebox.showerror("Cargar JSON", str(error))
+            return
+        self.actualizar_indicadores()
+        messagebox.showinfo(
+            "Cargar JSON",
+            texto_resultado_carga(str(datos.get("tipo_carga")), estadisticas),
+        )
+
+    def abrir_historial_sismico(self) -> None:
+        """List archived events. Reading the list does not change the catalog."""
+        dialogo = tk.Toplevel(self)
+        dialogo.title("Historial sismico")
+        dialogo.transient(self)
+        ttk.Label(
+            dialogo,
+            text="Eventos archivados. No estan en el arbol. Deshacer es otra lista: la de acciones de esta sesion.",
+            wraplength=460,
+        ).pack(padx=8, pady=(8, 4), anchor="w")
+        lista = tk.Listbox(dialogo, width=78, height=12)
+        lista.pack(padx=8, pady=4, fill="both", expand=True)
+        filas = filas_historial_sismico(self.catalogo)
+        if not filas:
+            lista.insert(tk.END, "No hay eventos archivados.")
+        else:
+            for fila in filas:
+                lista.insert(tk.END, fila)
+        ttk.Button(dialogo, text="Cerrar", command=dialogo.destroy).pack(pady=8)
 
     def deshacer_accion(self) -> None:
         """Undo the last action using the catalog's history stack."""
@@ -884,6 +980,42 @@ class VentanaSismoLab(tk.Tk):
         ttk.Button(frame_botones, text="Eliminar seleccionada", command=eliminar_seleccionada).pack(side=tk.LEFT, padx=2)
         ttk.Button(frame_botones, text="Actualizar lista", command=actualizar_lista).pack(side=tk.LEFT, padx=2)
 
+    def abrir_archivar_rama(self) -> None:
+        """Show the winning eligible subtree, then archive it only after confirmation."""
+        try:
+            candidatas = self.catalogo.listar_ramas_archivables()
+        except ValueError as error:
+            messagebox.showerror("Archivar rama", str(error))
+            return
+        if not candidatas:
+            messagebox.showinfo(
+                "Archivar rama",
+                "No hay rama elegible. Hace falta prioridad 1 y antiguedad mayor que T.",
+            )
+            return
+        ganadora = candidatas[0]
+        identificadores = ", ".join(f"SIS-{identificador:06d}" for identificador in ganadora.identificadores)
+        confirmar = messagebox.askyesno(
+            "Archivar rama",
+            (
+                f"Raiz SIS-{ganadora.id_raiz:06d}, profundidad {ganadora.profundidad}.\n"
+                f"{len(ganadora.identificadores)} eventos: {identificadores}\n\n"
+                "Esos eventos salen del AVL y del BST y quedan en el historial."
+            ),
+        )
+        if not confirmar:
+            return
+        try:
+            archivada = self.catalogo.archivar_rama()
+        except ValueError as error:
+            messagebox.showerror("Archivar rama", str(error))
+            return
+        self.actualizar_indicadores()
+        messagebox.showinfo(
+            "Archivar rama",
+            f"Archivada la rama de SIS-{archivada.id_raiz:06d} ({len(archivada.identificadores)} eventos).",
+        )
+
     def verificar_estructura(self) -> None:
         """Verify AVL structure and show results, distinguishing expected imbalance in stress mode."""
         exigir_balanceo = not self.catalogo.modo_estres
@@ -941,6 +1073,9 @@ class VentanaSismoLab(tk.Tk):
         ttk.Label(frame_indicadores, text=f"Altura: {avl_data['altura']}").pack(anchor=tk.W)
         ttk.Label(frame_indicadores, text=f"Hojas: {avl_data['hojas']}").pack(anchor=tk.W)
         ttk.Label(frame_indicadores, text=f"Profundidad maxima: {avl_data['profundidad_maxima']}").pack(anchor=tk.W)
+        ttk.Label(frame_indicadores, text=f"Giros izquierda: {avl_data['giros_izquierda']}").pack(anchor=tk.W)
+        ttk.Label(frame_indicadores, text=f"Giros derecha: {avl_data['giros_derecha']}").pack(anchor=tk.W)
+        ttk.Label(frame_indicadores, text=f"Casos LL: {avl_data['casos_ll']}").pack(anchor=tk.W)
         ttk.Label(frame_indicadores, text=f"Casos RR: {avl_data['casos_rr']}").pack(anchor=tk.W)
         ttk.Label(frame_indicadores, text=f"Casos LR: {avl_data['casos_lr']}").pack(anchor=tk.W)
         ttk.Label(frame_indicadores, text=f"Casos RL: {avl_data['casos_rl']}").pack(anchor=tk.W)
@@ -1003,6 +1138,61 @@ class VentanaSismoLab(tk.Tk):
                 messagebox.showerror("Error", "Ingrese un numero entero valido.")
 
         ttk.Button(frame_preparar, text="Preparar", command=preparar_n_reportes).pack(side=tk.LEFT, padx=5)
+
+        def encolar_elegido() -> None:
+            """Enqueue one report whose fields the user typed, not a random one."""
+            def al_aceptar(formulario: tk.Toplevel, valores: dict[str, str]) -> bool:
+                try:
+                    revision = int(valores["revision"])
+                    nuevo = Evento(
+                        identificador=self._leer_identificador(valores["identificador"]),
+                        magnitud=valores["magnitud"],
+                        profundidad_hipocentro=valores["profundidad_hipocentro"],
+                        x=valores["x"],
+                        y=valores["y"],
+                        ocurrencia=texto_a_fecha_utc(valores["ocurrencia"]),
+                        revision=revision,
+                        estaciones={valores["estacion"]},
+                    )
+                    nuevo.validar(self.catalogo.reloj)
+                    if self.catalogo.estaciones and valores["estacion"] not in self.catalogo.estaciones:
+                        raise ValueError(f"Estacion no configurada: {valores['estacion']}.")
+                    self.catalogo.encolar_reporte(Reporte(evento=nuevo, estacion=valores["estacion"]))
+                except (ValueError, KeyError) as error:
+                    messagebox.showerror("Encolar reporte", str(error), parent=formulario)
+                    return False
+                self._actualizar_vista_cola(tree_cola)
+                self.actualizar_indicadores()
+                return True
+
+            self._abrir_formulario(
+                "Encolar reporte",
+                (
+                    ("identificador", "Identificador"),
+                    ("magnitud", "Magnitud"),
+                    ("profundidad_hipocentro", "Profundidad (km)"),
+                    ("x", "X"),
+                    ("y", "Y"),
+                    ("ocurrencia", "Ocurrencia UTC"),
+                    ("revision", "Revision"),
+                    ("estacion", "Estacion"),
+                ),
+                al_aceptar,
+                valores_iniciales={
+                    "identificador": str(self._siguiente_identificador()),
+                    "magnitud": "4.5",
+                    "profundidad_hipocentro": "30.0",
+                    "x": "100.0",
+                    "y": "100.0",
+                    "ocurrencia": self._texto_reloj(),
+                    "revision": "1",
+                    "estacion": "EST-01",
+                },
+                ayuda="Sirve para un reporte antiguo, uno tardio o una revision mayor de un archivado.",
+                campo_reloj="ocurrencia",
+            )
+
+        ttk.Button(frame_preparar, text="Encolar uno", command=encolar_elegido).pack(side=tk.LEFT, padx=5)
 
         # Frame for queue view
         frame_cola = ttk.LabelFrame(ventana_cola, text="Cola FIFO (Orden de Llegada)")

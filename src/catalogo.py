@@ -1037,6 +1037,7 @@ class CatalogoSismico:
         self.avl = avl_temp
         self.bst = bst_temp
         self.indice_activos = indice_temp
+        self.archivados = {}
         self.modo_estres = (modo == "estres")
         # C2: this load schema carries no "asociaciones" field (CONTRATO section 2),
         # so associations must be computed fresh for the freshly-loaded scenario.
@@ -1300,6 +1301,7 @@ class CatalogoSismico:
         self.avl = avl_temp
         self.bst = bst_temp
         self.indice_activos = indice_temp
+        self.archivados = {}
         self.modo_estres = (modo == "estres")
         # C2: the topology load schema also carries no "asociaciones" field.
         self.recalcular_asociaciones()

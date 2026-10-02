@@ -42,7 +42,7 @@ La zona inicial cubre todo el mapa y no está poblada, así que la prioridad 3 p
 
 ## Consultar, corregir, revisar y eliminar
 
-**Consultar evento.** Escribe el identificador. El cuadro dice si está activo, archivado, eliminado o desconocido. Si está activo o archivado, muestra prioridad, magnitud, profundidad, coordenadas, revisión y estado (`pendiente` o `revisado`). Consultar no modifica el escenario.
+**Consultar evento.** Escribe el identificador. El cuadro dice si está activo, archivado, eliminado o desconocido. Muestra prioridad, magnitud, profundidad, coordenadas, revisión y estado. Si está activo, también la profundidad en el AVL, la altura del nodo, el factor, si el acceso es costoso, los candidatos y la referencia. Consultar no modifica el escenario.
 
 **Corregir evento.** El identificador es obligatorio. Los demás campos son opcionales: una caja vacía no se envía. Tiene que haber al menos un campo con dato. La revisión sube en 1 y el estado vuelve a `pendiente`. Si cambia la prioridad o la magnitud, el evento se reubica en los árboles.
 
@@ -54,13 +54,19 @@ La zona inicial cubre todo el mapa y no está poblada, así que la prioridad 3 p
 
 **Activar modo estres** deja de balancear el AVL en altas y eliminaciones. El orden de las claves se mantiene; el factor de balance puede salir de -1, 0 y 1.
 
-**Desactivar (recuperar)** vuelve al modo normal y rebalancea el árbol. La barra pasa a decir `Modo normal`.
+**Desactivar (recuperar)** vuelve al modo normal, rebalancea el árbol y dice cuántos giros usó la recuperación. La barra pasa a decir `Modo normal`.
 
 ## Cola de reportes
 
+**Cargar JSON** abre el explorador de archivos. Si el archivo dice `inserciones`, los eventos entran uno por uno. Si dice `topologia`, se reconstruyen los enlaces del árbol. Un archivo inválido muestra el error y deja el escenario como estaba, histórico incluido. Si la carga sale bien, sustituye los activos y vacía el histórico anterior. Al terminar, un cuadro muestra la raíz y la altura del AVL y del BST.
+
+**Archivar rama** está en Estructura. Busca la rama elegible (todos prioridad 1 y más viejos que T): la de más nodos, luego la raíz más profunda, luego el identificador mayor. Muestra la lista y solo archiva si confirmas. Esos eventos pasan al **Historial sismico** y salen de los árboles. **Deshacer** los devuelve.
+
+**Historial sismico** lista los eventos archivados (identificador, prioridad, magnitud, revisión y fecha). No están en el dibujo del árbol. Consultar uno de esos identificadores dice `archivado`. Esta lista no es **Deshacer**: deshacer revierte la última acción de la sesión.
+
 **Gestionar cola de reportes** abre otra ventana.
 
-1. Escribe una cantidad entera positiva y pulsa **Preparar**. Se encolan esa cantidad de reportes al azar (magnitud, profundidad, coordenadas y estación). El identificador continúa después del mayor que ya exista.
+1. **Preparar** encola una cantidad de reportes al azar. **Encolar uno** pide identificador, magnitud, profundidad, coordenadas, fecha, revisión y estación: así se demuestra un reporte antiguo, uno tardío o la revisión mayor de un archivado.
 2. La tabla muestra la cola en orden de llegada: estación, id y revisión. El primero de la tabla es el siguiente en procesarse.
 3. **Procesar Uno** resuelve solo ese reporte y escribe en el log la estación, el id, la revisión, la decisión y cuántos giros hubo.
 4. **Iniciar Continuo** procesa uno cada medio segundo. **Pausar** / **Reanudar** detiene o sigue. **Detener** corta el ciclo. Cerrar la ventana también lo detiene.
@@ -117,8 +123,4 @@ python -m unittest discover -s tests -v
 
 **Acceso costoso.** Eventos de prioridad 3 cuya profundidad en el AVL supera L.
 
-Consultar un evento eliminado muestra sus datos guardados (magnitud, coordenadas, fecha). Ese identificador no se puede volver a crear.
-
-## Qué no está en esta ventana
-
-No hay botón para archivar una rama ni para cargar un JSON. Esas operaciones siguen en el catálogo.
+Consultar un evento eliminado muestra sus datos guardados (magnitud, coordenadas, fecha). Ese identificador no se puede volver a crear. Los archivados se ven en **Historial sismico**.
