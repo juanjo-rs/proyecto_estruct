@@ -295,7 +295,22 @@ class VentanaSismoLab(tk.Tk):
             )
             return True
 
-        self._abrir_formulario("Crear evento", campos, al_aceptar)
+        self._abrir_formulario(
+            "Crear evento",
+            campos,
+            al_aceptar,
+            valores_iniciales={
+                "identificador": str(self._siguiente_identificador()),
+                "magnitud": "4.5",
+                "profundidad_hipocentro": "30.0",
+                "x": "100.0",
+                "y": "100.0",
+                "ocurrencia": self._texto_reloj(),
+                "estacion": "EST-01",
+            },
+            ayuda="La fecha puede ser 2026-10-01 18:30. No hace falta escribir la Z.",
+            campo_reloj="ocurrencia",
+        )
 
     def abrir_consultar_evento(self) -> None:
         """Show the catalog state of one id without changing the trees."""
@@ -320,20 +335,9 @@ class VentanaSismoLab(tk.Tk):
             return True
 
         self._abrir_formulario(
-            "Crear evento",
-            campos,
+            "Consultar evento",
+            (("identificador", "Identificador"),),
             al_aceptar,
-            valores_iniciales={
-                "identificador": str(self._siguiente_identificador()),
-                "magnitud": "4.5",
-                "profundidad_hipocentro": "30.0",
-                "x": "100.0",
-                "y": "100.0",
-                "ocurrencia": self._texto_reloj(),
-                "estacion": "EST-01",
-            },
-            ayuda="La fecha puede ser 2026-10-01 18:30. No hace falta escribir la Z.",
-            campo_reloj="ocurrencia",
         )
 
     def abrir_corregir_evento(self) -> None:
