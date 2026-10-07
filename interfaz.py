@@ -1176,15 +1176,21 @@ class VentanaSismoLab(tk.Tk):
 
         def preparar_n_reportes():
             try:
-                n = int(entrada_cantidad.get())
-                if n <= 0:
-                    messagebox.showerror("Error", "La cantidad debe ser un entero positivo.")
-                    return
-                self._generar_reportes_aleatorios(n)
-                self._actualizar_vista_cola(tree_cola)
-                messagebox.showinfo("Exito", f"Se prepararon {n} reportes.")
+                 n = int(entrada_cantidad.get().strip())
             except ValueError:
                 messagebox.showerror("Error", "Ingrese un numero entero valido.")
+                return
+            if n <= 0:
+                messagebox.showerror("Error", "La cantidad debe ser un entero positivo.")
+                return
+            try:
+                self._generar_reportes_aleatorios(n)
+            except ValueError as error:
+                messagebox.showerror("Error", str(error))
+                return
+            self._actualizar_vista_cola(tree_cola)
+            self.actualizar_indicadores()
+            messagebox.showinfo("Exito", f"Se prepararon {n} reportes.")
 
         ttk.Button(frame_preparar, text="Preparar", command=preparar_n_reportes).pack(side=tk.LEFT, padx=5)
 
@@ -1369,28 +1375,38 @@ class VentanaSismoLab(tk.Tk):
         ventana_cola.protocol("WM_DELETE_WINDOW", on_cerrar)
 
     def _generar_reportes_aleatorios(self, n: int) -> None:
-        """Generate N random reports and enqueue them."""
-        estaciones = [f"EST-{i:02d}" for i in range(1, 11)]
-        next_id = 1
-        if self.catalogo.indice_activos:
-            next_id = max(self.catalogo.indice_activos.keys()) + 1
-        if self.catalogo.archivados:
-            next_id = max(next_id, max(self.catalogo.archivados.keys()) + 1)
+        """Enqueue n random reports using only stations the scenario accepts.
 
-        for i in range(n):
+        Ids already active, archived, deleted, or waiting in the queue are skipped.
+        An empty station set would pass the enqueue and then fail when processed.
+        """
+        if self.catalogo.estaciones:
+            estaciones = sorted(self.catalogo.estaciones)
+        else:
+            estaciones = [f"EST-{i:02d}" for i in range(1, 11)]
+        ocupados = self._ids_ocupados()
+        creados = 0
+        candidato = 1
+        while creados < n:
+            while candidato in ocupados and candidato < 999999:
+                candidato += 1
+            if candidato in ocupados:
+                raise ValueError("No quedan identificadores libres para encolar.")
+            estacion = random.choice(estaciones)
             evento = Evento(
-                identificador=next_id + i,
+                identificador=candidato,
                 magnitud=Decimal(str(round(random.uniform(4.0, 7.0), 1))),
                 profundidad_hipocentro=Decimal(str(round(random.uniform(10.0, 100.0), 1))),
                 x=Decimal(str(round(random.uniform(0.0, 1000.0), 1))),
                 y=Decimal(str(round(random.uniform(0.0, 1000.0), 1))),
                 ocurrencia=self.catalogo.reloj.isoformat(),
                 revision=1,
-                estaciones=set(),
+                  estaciones={estacion},
             )
-            estacion = random.choice(estaciones)
-            reporte = Reporte(evento=evento, estacion=estacion)
-            self.catalogo.encolar_reporte(reporte)
+            self.catalogo.encolar_reporte(Reporte(evento=evento, estacion=estacion))
+            ocupados.add(candidato)
+            creados += 1
+            candidato += 1
 
     def _actualizar_vista_cola(self, tree: ttk.Treeview) -> None:
         """Update the queue view with current reports in FIFO order."""
