@@ -175,3 +175,61 @@ class TestPanelesGUI(TestCase):
             self.assertIn("identificador", item)
             self.assertIn("profundidad", item)
             self.assertIn("examinados", item)
+    def test_preparar_usa_estaciones_configuradas_y_no_repite_id(self) -> None:
+        """Random reports must process after stations exist, and must not reuse ids."""
+        from interfaz import VentanaSismoLab
+
+        ventana = VentanaSismoLab()
+        ventana.withdraw()
+        try:
+            ventana.catalogo.configurar_estaciones(["EST-01", "EST-02"])
+            ventana.catalogo.crear_evento(evento(4))
+            ventana.catalogo.eliminar_evento(4)
+            ventana._generar_reportes_aleatorios(3)
+            ventana._generar_reportes_aleatorios(2)
+            vistos = []
+            for reporte in ventana.catalogo.reportes_pendientes:
+                self.assertIn(reporte.estacion, {"EST-01", "EST-02"})
+                self.assertNotEqual(reporte.evento.identificador, 4)
+                vistos.append(reporte.evento.identificador)
+            self.assertEqual(len(vistos), 5)
+            self.assertEqual(len(set(vistos)), 5)
+            for _ in range(5):
+                ventana.catalogo.procesar_siguiente_reporte()
+            self.assertTrue(ventana.catalogo.reportes_pendientes.esta_vacia())
+            self.assertEqual(len(ventana.catalogo.indice_activos), 5)
+        finally:
+            ventana.destroy()
+
+    def test_consulta_de_asociacion_no_muestra_el_diccionario_crudo(self) -> None:
+        """Association and costly-access dialogs should read as sentences, not dicts."""
+        from interfaz import VentanaSismoLab
+
+        ventana = VentanaSismoLab()
+        ventana.withdraw()
+        try:
+            asociacion = ventana._linea_resultado(
+                {
+                    "identificador": 20,
+                    "estado": "activo",
+                    "candidatos": [{"identificador": 10, "estado": "activo"}],
+                    "referencia_elegida": {"identificador": 10, "estado": "activo"},
+                    "referenciado_por": [],
+                }
+            )
+            self.assertIn("SIS-000020", asociacion)
+            self.assertIn("candidatos: SIS-000010 (activo)", asociacion)
+            self.assertNotIn("{", asociacion)
+            costoso = ventana._linea_resultado(
+                {
+                    "identificador": 10,
+                    "profundidad_nodo": 4,
+                    "limite": 3,
+                    "nodos_visitados_busqueda": 5,
+                }
+            )
+            self.assertIn("SIS-000010", costoso)
+            self.assertIn("profundidad 4", costoso)
+            self.assertNotIn("{", costoso)
+        finally:
+            ventana.destroy()

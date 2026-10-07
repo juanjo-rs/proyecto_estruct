@@ -356,13 +356,20 @@ class VentanaSismoLab(tk.Tk):
         caja.delete(0, tk.END)
         caja.insert(0, self._texto_reloj())
 
-    def _siguiente_identificador(self) -> int:
-        """Smallest free id so the form does not ask the user to invent one."""
-        usados = (
+    def _ids_ocupados(self) -> set[int]:
+        """Ids that cannot be offered again: active, archived, deleted, or still queued."""
+        ocupados = (
             set(self.catalogo.indice_activos)
             | set(self.catalogo.archivados)
             | set(self.catalogo.eliminados)
         )
+        for reporte in self.catalogo.reportes_pendientes:
+            ocupados.add(reporte.evento.identificador)
+        return ocupados
+
+    def _siguiente_identificador(self) -> int:
+        """Smallest free id so the form does not ask the user to invent one."""
+        usados = self._ids_ocupados()
         candidato = 1
         while candidato in usados and candidato < 999999:
             candidato += 1
@@ -530,13 +537,49 @@ class VentanaSismoLab(tk.Tk):
         if not resultado.resultados:
             lineas.append("Sin resultados.")
         for item in resultado.resultados:
-            if isinstance(item, Evento):
-                lineas.append(
-                    f"SIS-{item.identificador:06d} prioridad {item.prioridad} magnitud {item.magnitud}"
-                )
-            else:
-                lineas.append(str(item))
+                lineas.append(self._linea_resultado(item))
         return "\n".join(lineas)
+
+    def _linea_resultado(self, item: object) -> str:
+        """One readable line for an event, an association, or an expensive-access hit."""
+        if isinstance(item, Evento):
+            return (
+                f"SIS-{item.identificador:06d} prioridad {item.prioridad} magnitud {item.magnitud}"
+            )
+        if not isinstance(item, dict):
+            return str(item)
+        if "candidatos" in item:
+            candidatos = ", ".join(
+                f"SIS-{candidato['identificador']:06d} ({candidato['estado']})"
+                for candidato in item["candidatos"]
+            ) or "ninguno"
+            referencia = item["referencia_elegida"]
+            referencia_txt = (
+                f"SIS-{referencia['identificador']:06d} ({referencia['estado']})"
+                if referencia
+                else "ninguna"
+            )
+            inversas = ", ".join(
+                f"SIS-{otro['identificador']:06d} ({otro['estado']})"
+                for otro in item.get("referenciado_por", [])
+            ) or "ninguno"
+            mensaje = item.get("mensaje")
+            if mensaje:
+                return f"SIS-{item['identificador']:06d}: {mensaje}"
+            return (
+                f"SIS-{item['identificador']:06d} ({item['estado']})\n"
+                f"candidatos: {candidatos}\n"
+                f"referencia: {referencia_txt}\n"
+                f"referenciado por: {inversas}"
+            )
+        if "profundidad_nodo" in item:
+            return (
+                f"SIS-{item['identificador']:06d} profundidad {item['profundidad_nodo']} "
+                f"(L={item['limite']}), busqueda {item['nodos_visitados_busqueda']} nodos"
+            )
+        if "mensaje" in item:
+            return f"SIS-{item['identificador']:06d}: {item['mensaje']}"
+        return str(item)
 
     def abrir_cambiar_parametro(self) -> None:
         """Send W, R, L or T to cambiar_parametro. The catalog validates and snapshots."""
@@ -827,11 +870,17 @@ class VentanaSismoLab(tk.Tk):
         )
 
     def activar_estres(self) -> None:
-        self.catalogo.activar_modo_estres()
+        """Turn stress on. A second click does not take another snapshot."""
+        if not self.catalogo.activar_modo_estres():
+            messagebox.showinfo("Modo estres", "El modo estres ya esta activo.")
+            return
         self.actualizar_indicadores()
 
     def desactivar_estres(self) -> None:
         """Leave stress mode and tell the user how many rotations the repair used."""
+        if not self.catalogo.modo_estres:
+            messagebox.showinfo("Recuperar AVL", "El catalogo ya esta en modo normal.")
+            return
         giros = self.catalogo.desactivar_modo_estres()
         self.actualizar_indicadores()
         messagebox.showinfo("Recuperar AVL", f"Modo normal. Giros de recuperacion: {giros}")
@@ -1229,17 +1278,16 @@ class VentanaSismoLab(tk.Tk):
                 messagebox.showinfo("Info", "La cola esta vacia.")
                 return
 
-            # Get report before processing
+            # Read the front report, then let the catalog dequeue and resolve it.
+            # Rotation totals come from the live AVL. Calling recuperar_balance()
+            # here would leave stress mode and would not dequeue the report.
             reporte = self.catalogo.reportes_pendientes.frente()
-
-            # Get balance before
-            giros_antes = self.catalogo.recuperar_balance()
+            giros_antes = self.catalogo.avl.giros_izquierda + self.catalogo.avl.giros_derecha
 
             # Process the report
             resultado = self.catalogo.procesar_siguiente_reporte()
 
-            # Get balance after
-            giros_despues = self.catalogo.recuperar_balance()
+            giros_despues = self.catalogo.avl.giros_izquierda + self.catalogo.avl.giros_derecha
             giros_ocurridos = giros_despues - giros_antes
 
             # Log the result
@@ -1262,8 +1310,7 @@ class VentanaSismoLab(tk.Tk):
             btn_iniciar.config(state=tk.DISABLED)
             btn_pausar.config(state=tk.NORMAL)
             btn_detener.config(state=tk.NORMAL)
-            self._ciclo_procesamiento(tree_cola, log_text)
-
+            _ciclo_procesamiento(tree_cola, log_text)
         def pausar_procesamiento():
             self._pausado = not self._pausado
             btn_pausar.config(text="Reanudar" if self._pausado else "Pausar")
@@ -1280,13 +1327,22 @@ class VentanaSismoLab(tk.Tk):
                 self._procesar_job = None
 
         def _ciclo_procesamiento(tree, log):
+            """Dequeue one report every half second until the queue is empty."""
             if not self._procesando:
                 return
-
-            if not self._pausado and not self.catalogo.reportes_pendientes.esta_vacia():
+            if self._pausado:
+                self._procesar_job = ventana_cola.after(500, lambda: _ciclo_procesamiento(tree, log))
+                return
+            if self.catalogo.reportes_pendientes.esta_vacia():
+                agregar_log("La cola quedo vacia.")
+                detener_procesamiento()
+                return
+            try:
                 procesar_uno()
-
-            # Schedule next iteration (500ms delay)
+            except (RuntimeError, ValueError, KeyError) as error:
+                agregar_log(f"Error: {error}")
+                detener_procesamiento()
+                return
             self._procesar_job = ventana_cola.after(500, lambda: _ciclo_procesamiento(tree, log))
 
         # Processing buttons
